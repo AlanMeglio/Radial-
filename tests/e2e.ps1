@@ -25,6 +25,7 @@ $exe = if ($env:RADIAL_EXE) { $env:RADIAL_EXE } else { Join-Path $PSScriptRoot "
 # Only touch the copy under test; a private mutex and settings folder keep it away from a running instance.
 Get-Process radial -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Resolve-Path $exe).Path } | Stop-Process -Force
 $env:RADIAL_INSTANCE = "e2e"; $env:RADIAL_NO_ONBOARDING = "1"; $env:APPDATA = Join-Path $env:TEMP "radial-e2e-appdata"
+Remove-Item $env:APPDATA -Recurse -Force -ErrorAction SilentlyContinue; New-Item $env:APPDATA -ItemType Directory | Out-Null
 $env:RADIAL_ANY_SURFACE = "1"
 $dir = Join-Path $env:TEMP "radial-e2e"; Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; New-Item $dir -ItemType Directory | Out-Null
 $bmp = New-Object System.Drawing.Bitmap 64,64; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::OrangeRed); $bmp.Save("$dir\x.png"); $g.Dispose(); $bmp.Dispose()
