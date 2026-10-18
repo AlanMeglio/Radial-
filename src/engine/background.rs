@@ -76,7 +76,7 @@ pub struct BgOptions {
 
 impl Default for BgOptions {
     fn default() -> Self {
-        BgOptions { background: PRESETS[0].1.clone(), padding: 64, corners: 24, shadow: 40, ratio: Ratio::Auto }
+        BgOptions { background: presets()[0].1.clone(), padding: 64, corners: 24, shadow: 40, ratio: Ratio::Auto }
     }
 }
 
@@ -89,20 +89,23 @@ fn grad(from: u32, to: u32) -> Background {
 }
 
 /// Ready-made backgrounds for the picker: (name, background).
-pub static PRESETS: std::sync::LazyLock<Vec<(&'static str, Background)>> = std::sync::LazyLock::new(|| {
-    vec![
-        ("Midnight", grad(0x0F2027, 0x2C5364)),
-        ("Sunset", grad(0xFF512F, 0xDD2476)),
-        ("Ocean", grad(0x2193B0, 0x6DD5ED)),
-        ("Aurora", grad(0x7F7FD5, 0x91EAE4)),
-        ("Peach", grad(0xFFB88C, 0xDE6262)),
-        ("Mint", grad(0x11998E, 0x38EF7D)),
-        ("Graphite", grad(0x232526, 0x414345)),
-        ("Snow", grad(0xE6E9F0, 0xEEF1F5)),
-        ("White", Background::Solid(rgb(0xFFFFFF))),
-        ("Black", Background::Solid(rgb(0x0B0B0B))),
-    ]
-});
+pub fn presets() -> &'static [(&'static str, Background)] {
+    static PRESETS: std::sync::OnceLock<Vec<(&'static str, Background)>> = std::sync::OnceLock::new();
+    PRESETS.get_or_init(|| {
+        vec![
+            ("Midnight", grad(0x0F2027, 0x2C5364)),
+            ("Sunset", grad(0xFF512F, 0xDD2476)),
+            ("Ocean", grad(0x2193B0, 0x6DD5ED)),
+            ("Aurora", grad(0x7F7FD5, 0x91EAE4)),
+            ("Peach", grad(0xFFB88C, 0xDE6262)),
+            ("Mint", grad(0x11998E, 0x38EF7D)),
+            ("Graphite", grad(0x232526, 0x414345)),
+            ("Snow", grad(0xE6E9F0, 0xEEF1F5)),
+            ("White", Background::Solid(rgb(0xFFFFFF))),
+            ("Black", Background::Solid(rgb(0x0B0B0B))),
+        ]
+    })
+}
 
 /// Canvas size for an image of `w` x `h` with `padding` and `ratio`.
 pub fn canvas_size(w: u32, h: u32, padding: u32, ratio: Ratio) -> (u64, u64) {
@@ -443,8 +446,8 @@ mod tests {
         let a = add_background(&red(30, 30), &o).unwrap();
         let b = add_background(&red(30, 30), &o).unwrap();
         assert_eq!(a, b);
-        assert!(PRESETS.len() >= 6);
-        for (name, bg) in PRESETS.iter() {
+        assert!(presets().len() >= 6);
+        for (name, bg) in presets().iter() {
             assert!(!name.is_empty());
             o.background = bg.clone();
             assert!(add_background(&red(8, 8), &o).is_ok(), "{name}");

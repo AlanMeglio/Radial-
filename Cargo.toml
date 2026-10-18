@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Drag a file, hold Shift, drop on a radial menu to convert it."
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.75"
 
 [features]
 # Pure-Rust AVIF encoder (rav1e): adds about 2.3 MB. Without it AVIF output needs an AV1 encoder in Windows,

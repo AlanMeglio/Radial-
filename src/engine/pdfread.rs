@@ -215,7 +215,7 @@ impl<'a> Lexer<'a> {
         let gen = self.word();
         if !gen.is_empty() && gen.iter().all(u8::is_ascii_digit) {
             self.skip_ws();
-            if self.peek() == Some(b'R') && self.d.get(self.p + 1).is_none_or(|&c| is_ws(c) || is_delim(c)) {
+            if self.peek() == Some(b'R') && self.d.get(self.p + 1).map_or(true, |&c| is_ws(c) || is_delim(c)) {
                 self.p += 1;
                 return u32::try_from(num).ok().map(Obj::Ref);
             }

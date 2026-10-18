@@ -537,7 +537,7 @@ fn strip_jpeg(bytes: &[u8]) -> Result<Vec<u8>> {
         out.extend_from_slice(&payload);
     };
     // EXIF belongs right after SOI, or right after a leading JFIF block.
-    if exif_pending && segs.first().is_none_or(|s| s.marker != 0xE0) {
+    if exif_pending && segs.first().map_or(true, |s| s.marker != 0xE0) {
         put_exif(&mut out);
         exif_pending = false;
     }
