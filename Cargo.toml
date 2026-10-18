@@ -18,6 +18,8 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 # Deflate for PDF streams and DOCX (zip) with the pure-Rust backend only.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 crc32fast = { version = "1", default-features = false, features = ["std"] }
+# Same version `image` already links; used directly for palette-optimised PNG output.
+png = { version = "0.18", default-features = false }
 
 [dependencies.image]
 version = "0.25"

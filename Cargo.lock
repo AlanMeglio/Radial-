@@ -681,6 +681,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "image",
+ "png",
  "tiny-skia",
  "windows",
  "windows-sys",

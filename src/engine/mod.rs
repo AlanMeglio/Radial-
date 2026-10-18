@@ -10,7 +10,15 @@
 //! Nothing here overwrites a file, panics on damaged input, or decodes beyond `raster::MAX_PIXELS`.
 #![allow(dead_code)] // entry points are wired into the UI incrementally
 
+pub mod actions;
+pub mod annotate;
+pub mod background;
+#[cfg(test)]
+mod bench;
+pub mod compress;
+pub mod crop;
 pub mod docx;
+pub mod edit;
 pub mod error;
 pub mod io;
 pub mod jpeg;
@@ -21,6 +29,7 @@ pub mod pdfread;
 pub mod pdfwrite;
 pub mod pipeline;
 pub mod raster;
+pub mod redact;
 pub mod zip;
 
 #[allow(unused_imports)] // re-exported for the UI layer
