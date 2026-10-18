@@ -1,10 +1,10 @@
 //! The overlay: a topmost, non-activating layered window that is also an OLE drop target.
 //! Everything is event driven; the frame timer only runs while something is animating.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Instant;
@@ -20,9 +20,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{mouse_event, MOUSEEVENTF_M
 use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::config::{plan_destination, tr, Config, Dest};
 use crate::convert::{self, Fmt, ALL};
 use crate::geometry::{clamp_origin, sector_at};
-use crate::render::{self, Fonts, Scene, Slot, CENTER, DEAD_R, HIT_OUT, SIZE};
+use crate::render::{Backdrop, Face, Look, Renderer, Scene, Slot};
 
 pub const WM_SHOW: u32 = WM_APP + 10; // lparam: x | y << 16 (signed 16 bit each)
 pub const WM_HIDE: u32 = WM_APP + 11;
@@ -31,9 +32,12 @@ pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<String> with the result tex
 
 const TIMER_FRAME: usize = 1;
 const TIMER_HIDE: usize = 2;
-const FRAME_MS: u32 = 15;
-const OPEN_SECS: f32 = 0.22;
-const CLOSE_SECS: f32 = 0.15;
+const TIMER_DELAY: usize = 3;
+const FRAME_MS: u32 = 8;
+const OPEN_SECS: f32 = 0.20;
+const CLOSE_SECS: f32 = 0.16;
+/// How long the confirmation pulse plays after a drop.
+const CONFIRM_SECS: f32 = 0.46;
 const COPY: u32 = 1;
 const NONE: u32 = 0;
 
@@ -55,6 +59,31 @@ enum Phase {
     Closing,
 }
 
+/// Critically-damped-ish spring integrated with fixed sub-steps so large frame gaps stay stable.
+#[derive(Clone, Copy, Default)]
+pub struct Spring {
+    pub x: f32,
+    pub v: f32,
+}
+
+impl Spring {
+    pub fn step(&mut self, target: f32, stiffness: f32, damping_ratio: f32, dt: f32) {
+        let c = 2.0 * damping_ratio * stiffness.sqrt();
+        let mut left = dt;
+        while left > 0.0 {
+            let h = left.min(1.0 / 240.0);
+            let a = stiffness * (target - self.x) - c * self.v;
+            self.v += a * h;
+            self.x += self.v * h;
+            left -= h;
+        }
+    }
+
+    pub fn settled(&self, target: f32) -> bool {
+        (self.x - target).abs() < 0.002 && self.v.abs() < 0.02
+    }
+}
+
 struct Ov {
     dpi: f32,
     side: i32,
@@ -64,17 +93,27 @@ struct Ov {
     old: HGDIOBJ,
     bits: *mut u8,
     pm: Pixmap,
-    fonts: Option<Fonts>,
+    renderer: Renderer,
+    look: Look,
+    backdrop: Option<Backdrop>,
+    speed: f32,
     scene: Scene,
+    appear: Vec<Spring>,
+    hover_sp: Vec<Spring>,
     phase: Phase,
+    /// Seconds since the menu started opening.
+    age: f32,
     target_open: f32,
     hover: Option<usize>,
     files: Vec<PathBuf>,
     last: Instant,
+    /// Seconds into the drop confirmation, if one is playing.
+    confirm_t: Option<f32>,
 }
 
 thread_local! {
     static OV: RefCell<Option<Ov>> = const { RefCell::new(None) };
+    static PENDING_AT: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
 }
 
 /// Runs `f` on the overlay state; does nothing when it is not shown or already borrowed.
@@ -84,22 +123,42 @@ fn with<R>(f: impl FnOnce(&mut Ov) -> R) -> Option<R> {
 
 // ---------- Show / hide ----------
 
+/// Copies the screen area under the window into the DIB, for the frosted-glass backdrop.
+unsafe fn capture_backdrop(
+    dc: HDC,
+    bits: *const u8,
+    origin: (i32, i32),
+    side: i32,
+    look: &Look,
+    dpi: f32,
+) -> Option<Backdrop> {
+    let screen = GetDC(null_mut());
+    let ok = BitBlt(dc, 0, 0, side, side, screen, origin.0, origin.1, SRCCOPY) != 0;
+    ReleaseDC(null_mut(), screen);
+    if !ok {
+        return None;
+    }
+    let src = std::slice::from_raw_parts(bits, (side * side * 4) as usize);
+    let blur = look.theme.blur * look.glass * look.scale * dpi;
+    Backdrop::new(src, side as u32, side as u32, true, blur, look.theme.saturation)
+}
+
 pub unsafe fn show(x: i32, y: i32) {
     hide_now();
+    let look = crate::current_look();
+    let speed = crate::current_config().speed;
     let pt = POINT { x, y };
     let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
     let (mut dx, mut dy) = (96u32, 96u32);
     GetDpiForMonitor(mon, 0, &mut dx, &mut dy);
     let dpi = dx as f32 / 96.0;
-    let side = (SIZE * dpi).round() as i32;
+    let side = look.side_px(dpi) as i32;
     let mut mi: MONITORINFO = zeroed();
     mi.cbSize = size_of::<MONITORINFO>() as u32;
     GetMonitorInfoW(mon, &mut mi);
     let r = mi.rcMonitor;
     // Keep the cursor at the menu centre when possible, otherwise slide the window onto the screen.
-    let c = (CENTER * dpi) as i32;
-    let origin =
-        (clamp_origin(x - c + side / 2, side, r.left, r.right), clamp_origin(y - c + side / 2, side, r.top, r.bottom));
+    let origin = (clamp_origin(x, side, r.left, r.right), clamp_origin(y, side, r.top, r.bottom));
 
     let screen = GetDC(null_mut());
     let dc = CreateCompatibleDC(screen);
@@ -118,6 +177,8 @@ pub unsafe fn show(x: i32, y: i32) {
         return;
     }
     let old = SelectObject(dc, dib);
+    let backdrop = capture_backdrop(dc, bits as *const u8, origin, side, &look, dpi);
+    let face = Face::load(look.theme.font, look.theme.weight);
     let ov = Ov {
         dpi,
         side,
@@ -127,20 +188,20 @@ pub unsafe fn show(x: i32, y: i32) {
         old,
         bits: bits as *mut u8,
         pm,
-        fonts: Fonts::load(),
-        scene: Scene {
-            slots: vec![],
-            open: 0.0,
-            hover: vec![],
-            main: String::new(),
-            sub: String::new(),
-            main_accent: false,
-        },
+        renderer: Renderer::new(face),
+        look,
+        backdrop,
+        speed,
+        scene: Scene::new(vec![], String::new(), String::new()),
+        appear: vec![],
+        hover_sp: vec![],
         phase: Phase::Pending,
+        age: 0.0,
         target_open: 0.0,
         hover: None,
         files: vec![],
         last: Instant::now(),
+        confirm_t: None,
     };
     OV.with(|c| *c.borrow_mut() = Some(ov));
     let h = hwnd();
@@ -168,10 +229,12 @@ unsafe fn begin_close() {
         if o.phase == Phase::Pending {
             return true;
         }
-        o.phase = Phase::Closing;
-        o.target_open = 0.0;
-        o.hover = None;
-        o.last = Instant::now();
+        if o.phase != Phase::Closing {
+            o.phase = Phase::Closing;
+            o.target_open = 0.0;
+            o.hover = None;
+            o.last = Instant::now();
+        }
         false
     });
     match pending {
@@ -185,7 +248,7 @@ unsafe fn start_timer() {
 }
 
 unsafe fn present(o: &mut Ov) {
-    render::render(&mut o.pm, &o.scene, o.dpi, o.fonts.as_ref());
+    o.renderer.render(&mut o.pm, &o.scene, &o.look, o.dpi);
     // tiny-skia is premultiplied RGBA; a 32-bit DIB is premultiplied BGRA.
     let src = o.pm.data();
     let dst = std::slice::from_raw_parts_mut(o.bits, src.len());
@@ -209,30 +272,56 @@ unsafe fn present(o: &mut Ov) {
 
 type SIZE_ = windows_sys::Win32::Foundation::SIZE;
 
-unsafe fn tick() {
-    let done = with(|o| {
-        let now = Instant::now();
-        let dt = (now - o.last).as_secs_f32().min(0.05);
-        o.last = now;
-        let step = dt / if o.target_open > o.scene.open { OPEN_SECS } else { CLOSE_SECS };
+/// Advances every animated value by `dt` seconds; returns true when everything has come to rest.
+fn advance(o: &mut Ov, dt: f32) -> bool {
+    let th = &o.look.theme;
+    let dt = dt * o.speed;
+    o.age += dt;
+    let n = o.scene.slots.len();
+    let mut settled = true;
+
+    if let Some(t) = o.confirm_t.as_mut() {
+        *t += dt;
+        let p = (*t / CONFIRM_SECS).min(1.0);
+        o.scene.pulse = p;
+        // Stay fully open for the first part of the pulse, then fade away.
+        o.scene.open = if p < 0.6 { 1.0 } else { 1.0 - ((p - 0.6) / 0.4).min(1.0) };
+        settled = p >= 1.0;
+    } else {
+        let secs = if o.target_open > o.scene.open { OPEN_SECS } else { CLOSE_SECS };
+        let step = dt / secs;
         o.scene.open = if o.target_open > o.scene.open {
             (o.scene.open + step).min(o.target_open)
         } else {
             (o.scene.open - step).max(o.target_open)
         };
-        let k = 1.0 - (-dt * 24.0).exp();
-        let mut settled = o.scene.open == o.target_open;
-        for (i, h) in o.scene.hover.iter_mut().enumerate() {
-            let t = if Some(i) == o.hover { 1.0 } else { 0.0 };
-            *h += (t - *h) * k;
-            if (t - *h).abs() < 0.01 {
-                *h = t;
-            } else {
-                settled = false;
-            }
-        }
+        settled &= o.scene.open == o.target_open;
+    }
+
+    for i in 0..n {
+        // Staggered entrance: sector i starts moving after i * stagger seconds; nothing moves while closing.
+        let go = o.phase == Phase::Open && o.age >= th.stagger * i as f32;
+        let target = if o.phase == Phase::Closing { o.appear[i].x.clamp(0.0, 1.0).round() } else { go as u8 as f32 };
+        o.appear[i].step(target, th.stiffness, th.damping, dt);
+        settled &= o.appear[i].settled(target) && (o.phase != Phase::Open || go);
+        o.scene.appear[i] = o.appear[i].x;
+
+        let ht = if Some(i) == o.hover || (o.confirm_t.is_some() && o.scene.confirm == Some(i)) { 1.0 } else { 0.0 };
+        o.hover_sp[i].step(ht, th.stiffness * 1.4, (th.damping + 0.25).min(1.0), dt);
+        settled &= o.hover_sp[i].settled(ht);
+        o.scene.hover[i] = o.hover_sp[i].x.clamp(0.0, 1.15);
+    }
+    settled
+}
+
+unsafe fn tick() {
+    let done = with(|o| {
+        let now = Instant::now();
+        let dt = (now - o.last).as_secs_f32().min(0.05);
+        o.last = now;
+        let settled = advance(o, dt);
         present(o);
-        if o.phase == Phase::Closing && o.scene.open <= 0.0 {
+        if o.phase == Phase::Closing && (o.scene.open <= 0.0 && o.confirm_t.map_or(true, |_| settled)) {
             Some(true)
         } else {
             Some(settled)
@@ -260,12 +349,31 @@ unsafe fn tick() {
 /// Handles overlay messages; returns true when consumed.
 pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
     match msg {
-        WM_SHOW => show(lp as i16 as i32, (lp >> 16) as i16 as i32),
-        WM_HIDE => begin_close(),
+        WM_SHOW => {
+            let (x, y) = (lp as i16 as i32, (lp >> 16) as i16 as i32);
+            let delay = crate::current_config().delay_ms;
+            if delay == 0 {
+                show(x, y);
+            } else {
+                PENDING_AT.with(|c| c.set(Some((x, y))));
+                SetTimer(hwnd(), TIMER_DELAY, delay, None);
+            }
+        }
+        WM_HIDE => {
+            cancel_delay();
+            begin_close();
+        }
         WM_HIDE_SOON => {
+            cancel_delay();
             SetTimer(hwnd(), TIMER_HIDE, 400, None);
         }
         WM_TIMER if wp == TIMER_FRAME => tick(),
+        WM_TIMER if wp == TIMER_DELAY => {
+            KillTimer(hwnd(), TIMER_DELAY);
+            if let Some((x, y)) = PENDING_AT.with(|c| c.take()) {
+                show(x, y);
+            }
+        }
         WM_TIMER if wp == TIMER_HIDE => {
             KillTimer(hwnd(), TIMER_HIDE);
             begin_close();
@@ -275,22 +383,36 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
     true
 }
 
+unsafe fn cancel_delay() {
+    KillTimer(hwnd(), TIMER_DELAY);
+    PENDING_AT.with(|c| c.set(None));
+}
+
 // ---------- Menu model ----------
+
+fn size_text(files: &[PathBuf]) -> String {
+    match files {
+        [one] => std::fs::metadata(one).map(|m| convert::human_size(m.len())).unwrap_or_default(),
+        many => format!("{} files", many.len()),
+    }
+}
+
+fn idle_texts(src: Fmt, files: &[PathBuf]) -> (String, String) {
+    (src.label().into(), size_text(files))
+}
 
 fn build_scene(src: Fmt, files: &[PathBuf]) -> Scene {
     let slots: Vec<Slot> = ALL.iter().map(|f| Slot { label: f.label(), enabled: f.encodable() && *f != src }).collect();
-    let sub = match files {
-        [one] => std::fs::metadata(one).map(|m| convert::human_size(m.len())).unwrap_or_default(),
-        many => format!("{} files", many.len()),
-    };
-    Scene { hover: vec![0.0; slots.len()], slots, open: 0.0, main: src.label().into(), sub, main_accent: false }
+    let (main, sub) = idle_texts(src, files);
+    Scene::new(slots, main, sub)
 }
 
 /// Sector under the screen point, relative to the current menu.
 fn sector_for(o: &Ov, pt: POINTL) -> Option<usize> {
-    let cx = o.origin.0 as f32 + CENTER * o.dpi;
-    let cy = o.origin.1 as f32 + CENTER * o.dpi;
-    sector_at((pt.x as f32 - cx) / o.dpi, (pt.y as f32 - cy) / o.dpi, o.scene.slots.len(), DEAD_R, HIT_OUT)
+    let m = o.look.m;
+    let cx = o.origin.0 as f32 + m.center * o.dpi;
+    let cy = o.origin.1 as f32 + m.center * o.dpi;
+    sector_at((pt.x as f32 - cx) / o.dpi, (pt.y as f32 - cy) / o.dpi, o.scene.slots.len(), m.hub, m.hit_out)
 }
 
 /// Updates hover state for a drag position; returns the drop effect to show.
@@ -309,11 +431,10 @@ fn hover_at(o: &mut Ov, pt: POINTL) -> (u32, bool) {
             o.scene.main_accent = true;
         }
         None => {
-            let src = o.files.first().and_then(|f| convert::source_format(f));
-            if let Some(src) = src {
-                let fresh = build_scene(src, &o.files);
-                o.scene.main = fresh.main;
-                o.scene.sub = fresh.sub;
+            if let Some(src) = o.files.first().and_then(|f| convert::source_format(f)) {
+                let (main, sub) = idle_texts(src, &o.files);
+                o.scene.main = main;
+                o.scene.sub = sub;
                 o.scene.main_accent = false;
             }
         }
@@ -410,9 +531,14 @@ unsafe extern "system" fn drag_enter(
     let Some(src) = src else { return 0 };
     let opened = with(|o| {
         o.scene = build_scene(src, &files);
+        let n = o.scene.slots.len();
+        o.appear = vec![Spring::default(); n];
+        o.hover_sp = vec![Spring::default(); n];
+        o.renderer.prepare(&o.look, o.dpi, o.side as u32, o.backdrop.as_ref(), n);
         o.files = files;
         o.phase = Phase::Open;
         o.target_open = 1.0;
+        o.age = 0.0;
         o.last = Instant::now();
         *effect = hover_at(o, pt).0;
     });
@@ -444,36 +570,74 @@ unsafe extern "system" fn on_drop(_: *mut c_void, _data: *mut c_void, _keys: u32
     let job = with(|o| {
         let (e, _) = hover_at(o, pt);
         let idx = o.hover.filter(|_| e == COPY)?;
+        // Start the confirmation: the ring pulses out from the hub while the sector stays lit.
+        o.phase = Phase::Closing;
+        o.confirm_t = Some(0.0);
+        o.scene.confirm = Some(idx);
+        o.scene.pulse = 0.001;
+        o.last = Instant::now();
         Some((ALL[idx], o.files.clone()))
     })
     .flatten();
     if let Some((fmt, files)) = job {
         *effect = COPY;
+        start_timer();
         let h = hwnd() as usize;
-        std::thread::spawn(move || run_job(h, fmt, files));
+        let cfg = crate::current_config();
+        std::thread::spawn(move || run_job(h, fmt, files, cfg));
+    } else {
+        begin_close();
     }
-    begin_close();
     0
 }
 
+/// Moves `from` to `to`, falling back to copy + delete across volumes.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if let Some(dir) = to.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::rename(from, to).or_else(|_| std::fs::copy(from, to).and_then(|_| std::fs::remove_file(from)))
+}
+
+/// Applies the output folder and name-collision settings to a freshly converted file.
+fn place(source: &Path, result: PathBuf, cfg: &Config) -> Result<Option<PathBuf>, String> {
+    let out = cfg.out_path();
+    match plan_destination(source, &result, out.as_deref(), cfg.collision, |p| p.exists()) {
+        Dest::Keep(p) => Ok(Some(p)),
+        Dest::Move(p) => move_file(&result, &p).map(|_| Some(p)).map_err(|e| e.to_string()),
+        Dest::Replace(p) => {
+            let _ = std::fs::remove_file(&p);
+            move_file(&result, &p).map(|_| Some(p)).map_err(|e| e.to_string())
+        }
+        Dest::Discard => {
+            let _ = std::fs::remove_file(&result);
+            Ok(None)
+        }
+    }
+}
+
 /// Converts on a worker thread and reports the outcome to the UI thread.
-fn run_job(h: usize, fmt: Fmt, files: Vec<PathBuf>) {
+fn run_job(h: usize, fmt: Fmt, files: Vec<PathBuf>, cfg: Config) {
     let mut ok = Vec::new();
+    let mut skipped = Vec::new();
     let mut errs = Vec::new();
     for f in &files {
-        match convert::convert(f, fmt) {
-            Ok(p) => ok.push(p),
+        match convert::convert(f, fmt).and_then(|p| place(f, p, &cfg)) {
+            Ok(Some(p)) => ok.push(p),
+            Ok(None) => skipped.push(f.clone()),
             Err(e) => errs.push(e),
         }
     }
-    let text = match (ok.as_slice(), errs.first()) {
-        ([one], None) => {
-            format!("Saved {}", one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-        }
-        (_, None) => format!("Converted {} files to {}", ok.len(), fmt.label()),
-        (_, Some(e)) => format!("Failed: {e}"),
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let l = cfg.lang;
+    let text = match (ok.as_slice(), errs.first(), skipped.first()) {
+        (_, Some(e), _) => tr(l, "failed").replace("{}", e),
+        ([one], None, _) => tr(l, "saved").replace("{}", &name(one)),
+        ([], None, Some(s)) => tr(l, "skipped").replace("{}", &name(s)),
+        (_, None, _) => tr(l, "converted").replacen("{}", &ok.len().to_string(), 1).replacen("{}", fmt.label(), 1),
     };
-    let boxed = Box::into_raw(Box::new(text));
+    let failed = !errs.is_empty();
+    let boxed = Box::into_raw(Box::new((text, failed)));
     unsafe {
         if PostMessageW(h as HWND, WM_DONE, 0, boxed as LPARAM) == 0 {
             drop(Box::from_raw(boxed));

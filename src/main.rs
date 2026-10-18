@@ -7,36 +7,167 @@ mod convert;
 mod geometry;
 mod overlay;
 mod render;
+mod settings;
 mod theme;
 mod trigger;
 
 use std::cell::RefCell;
+use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
+use config::{tr, Config, Lang, TriggerKey};
+use render::Look;
 use trigger::{Act, Pt, Tracker};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Ole::{OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const WM_TRAY: u32 = WM_APP + 1;
 const ID_QUIT: usize = 1;
+const ID_SETTINGS: usize = 2;
+const ID_PAUSE: usize = 3;
+const ID_AUTOSTART: usize = 4;
+const ID_ABOUT: usize = 5;
 /// Test knob: `RADIAL_ANY_SURFACE=1` accepts drags that start anywhere (used by the end-to-end script).
 static ANY_SURFACE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+static PAUSED: AtomicBool = AtomicBool::new(false);
+/// 0 shift, 1 ctrl, 2 alt, 3 none; read by the hook procedures, which must not touch the app state.
+static TRIGGER: AtomicU32 = AtomicU32::new(0);
+
+struct App {
+    cfg: Config,
+    user_themes: Vec<theme::Theme>,
+    look: Look,
+}
 
 thread_local! {
     static TRACKER: RefCell<Tracker> = RefCell::new(Tracker::default());
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
+}
+
+// ---------- Shared settings state ----------
+
+pub fn current_config() -> Config {
+    APP.with(|a| a.borrow().as_ref().map(|a| a.cfg.clone()).unwrap_or_default())
+}
+
+pub fn current_look() -> Look {
+    APP.with(|a| a.borrow().as_ref().map(|a| a.look.clone()).unwrap_or_else(|| Look::new(&Config::default(), &[])))
+}
+
+pub fn user_themes() -> Vec<theme::Theme> {
+    APP.with(|a| a.borrow().as_ref().map(|a| a.user_themes.clone()).unwrap_or_default())
+}
+
+fn trigger_code(t: TriggerKey) -> u32 {
+    match t {
+        TriggerKey::Shift => 0,
+        TriggerKey::Ctrl => 1,
+        TriggerKey::Alt => 2,
+        TriggerKey::None => 3,
+    }
+}
+
+/// Virtual-key codes (generic, left, right) of the trigger key, or none.
+fn trigger_keys() -> Option<[u32; 3]> {
+    match TRIGGER.load(Relaxed) {
+        0 => Some([VK_SHIFT as u32, VK_LSHIFT as u32, VK_RSHIFT as u32]),
+        1 => Some([VK_CONTROL as u32, VK_LCONTROL as u32, VK_RCONTROL as u32]),
+        2 => Some([VK_MENU as u32, VK_LMENU as u32, VK_RMENU as u32]),
+        _ => None,
+    }
+}
+
+pub fn key_name(t: TriggerKey, lang: Lang) -> &'static str {
+    match t {
+        TriggerKey::Shift => "Shift",
+        TriggerKey::Ctrl => "Ctrl",
+        TriggerKey::Alt => "Alt",
+        TriggerKey::None => tr(lang, "key-any"),
+    }
+}
+
+/// Applies and persists a new configuration: look, trigger key, autostart, tray tooltip and icon.
+pub fn set_config(cfg: Config) {
+    let user = user_themes_cached();
+    let look = Look::new(&cfg, &user);
+    TRIGGER.store(trigger_code(cfg.trigger), Relaxed);
+    let autostart_changed = APP.with(|a| a.borrow().as_ref().map_or(true, |a| a.cfg.autostart != cfg.autostart));
+    if autostart_changed {
+        set_autostart(cfg.autostart);
+    }
+    let _ = config::save(&cfg);
+    APP.with(|a| *a.borrow_mut() = Some(App { cfg, user_themes: user, look }));
+    unsafe { refresh_tray(overlay_hwnd()) };
+}
+
+fn user_themes_cached() -> Vec<theme::Theme> {
+    let have = APP.with(|a| a.borrow().as_ref().map(|a| a.user_themes.clone()));
+    have.unwrap_or_else(config::user_themes)
+}
+
+// ---------- Start with Windows (HKCU Run) ----------
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn RegSetKeyValueW(key: isize, sub: *const u16, name: *const u16, ty: u32, data: *const c_void, cb: u32) -> i32;
+    fn RegDeleteKeyValueW(key: isize, sub: *const u16, name: *const u16) -> i32;
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn MessageBeep(kind: u32) -> i32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetUserDefaultLocaleName(name: *mut u16, cch: i32) -> i32;
+}
+
+const HKCU: isize = 0x8000_0001u32 as i32 as isize;
+const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+pub fn set_autostart(on: bool) {
+    let (sub, name) = (wide(RUN_KEY), wide("Radial"));
+    unsafe {
+        if on {
+            let Ok(exe) = std::env::current_exe() else { return };
+            let val = wide(&format!("\"{}\"", exe.display()));
+            RegSetKeyValueW(
+                HKCU,
+                sub.as_ptr(),
+                name.as_ptr(),
+                1,
+                val.as_ptr() as *const c_void,
+                (val.len() * 2) as u32,
+            );
+        } else {
+            RegDeleteKeyValueW(HKCU, sub.as_ptr(), name.as_ptr());
+        }
+    }
+}
+
+fn system_language() -> Lang {
+    let mut buf = [0u16; 85];
+    let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+    let s = String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize]);
+    if s.to_ascii_lowercase().starts_with("es") {
+        Lang::Es
+    } else {
+        Lang::En
+    }
 }
 
 // ---------- Hooks ----------
@@ -78,7 +209,7 @@ unsafe fn root_class_at(p: POINT) -> String {
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if code == HC_ACTION as i32 {
+    if code == HC_ACTION as i32 && !PAUSED.load(Relaxed) {
         let ms = &*(lp as *const MSLLHOOKSTRUCT);
         let p = Pt { x: ms.pt.x, y: ms.pt.y };
         let mut up = false;
@@ -89,7 +220,10 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     let eligible = ANY_SURFACE.load(Relaxed) || trigger::is_file_surface(&root_class_at(ms.pt));
                     t.button_down(p, eligible)
                 }
-                WM_MOUSEMOVE => t.moved(p, GetAsyncKeyState(VK_SHIFT as i32) < 0),
+                WM_MOUSEMOVE => {
+                    let held = trigger_keys().map_or(true, |k| GetAsyncKeyState(k[0] as i32) < 0);
+                    t.moved(p, held)
+                }
                 WM_LBUTTONUP => {
                     up = true;
                     t.button_up()
@@ -103,9 +237,9 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
 }
 
 unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if code == HC_ACTION as i32 {
+    if code == HC_ACTION as i32 && !PAUSED.load(Relaxed) {
         let k = &*(lp as *const KBDLLHOOKSTRUCT);
-        if matches!(k.vkCode, c if c == VK_SHIFT as u32 || c == VK_LSHIFT as u32 || c == VK_RSHIFT as u32) {
+        if trigger_keys().is_some_and(|keys| keys.contains(&k.vkCode)) {
             let down = matches!(wp as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             let act = TRACKER.with(|t| t.borrow_mut().shift_changed(down));
             dispatch(act, false);
@@ -116,9 +250,10 @@ unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
 
 // ---------- Tray ----------
 
-unsafe fn tray_icon() -> HICON {
+unsafe fn tray_icon(paused: bool) -> HICON {
     const N: u32 = 32;
-    let Some(pm) = render::icon_pixmap(N) else { return null_mut() };
+    let accent = if paused { theme::Rgba::rgb(120, 126, 140) } else { current_look().theme.accent };
+    let Some(pm) = render::icon_pixmap(N, accent) else { return null_mut() };
     // 32-bit colour bitmap with straight alpha (BGRA) plus an all-zero mask.
     let mut color = Vec::with_capacity((N * N * 4) as usize);
     for px in pm.pixels() {
@@ -144,13 +279,39 @@ fn put(dst: &mut [u16], s: &str) {
     }
 }
 
-unsafe fn add_tray(hwnd: HWND) {
-    let mut n = nid(hwnd);
+fn tip() -> String {
+    let cfg = current_config();
+    if PAUSED.load(Relaxed) {
+        tr(cfg.lang, "tip-paused").to_string()
+    } else {
+        tr(cfg.lang, "tip").replace("{}", key_name(cfg.trigger, cfg.lang))
+    }
+}
+
+unsafe fn fill_tray(n: &mut NOTIFYICONDATAW) -> HICON {
     n.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     n.uCallbackMessage = WM_TRAY;
-    n.hIcon = tray_icon();
-    put(&mut n.szTip, "Radial: hold Shift while dragging a file");
+    n.hIcon = tray_icon(PAUSED.load(Relaxed));
+    put(&mut n.szTip, &tip());
+    n.hIcon
+}
+
+unsafe fn add_tray(hwnd: HWND) {
+    let mut n = nid(hwnd);
+    let icon = fill_tray(&mut n);
     Shell_NotifyIconW(NIM_ADD, &n);
+    DestroyIcon(icon);
+}
+
+/// Updates icon and tooltip after a setting changed.
+unsafe fn refresh_tray(hwnd: HWND) {
+    if hwnd.is_null() {
+        return;
+    }
+    let mut n = nid(hwnd);
+    let icon = fill_tray(&mut n);
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+    DestroyIcon(icon);
 }
 
 unsafe fn balloon(hwnd: HWND, text: &str) {
@@ -163,8 +324,20 @@ unsafe fn balloon(hwnd: HWND, text: &str) {
 }
 
 unsafe fn tray_menu(hwnd: HWND) {
+    let cfg = current_config();
+    let l = cfg.lang;
     let menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, ID_QUIT, wide("Quit").as_ptr());
+    let item = |id: usize, key: &str, checked: bool| {
+        let flags = MF_STRING | if checked { MF_CHECKED } else { 0 };
+        AppendMenuW(menu, flags, id, wide(tr(l, key)).as_ptr());
+    };
+    item(ID_SETTINGS, "settings", false);
+    let paused = PAUSED.load(Relaxed);
+    item(ID_PAUSE, if paused { "resume" } else { "pause" }, false);
+    item(ID_AUTOSTART, "startup", cfg.autostart);
+    item(ID_ABOUT, "about", false);
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    item(ID_QUIT, "quit", false);
     let mut pt: POINT = zeroed();
     GetCursorPos(&mut pt);
     SetForegroundWindow(hwnd); // required so the menu closes when clicking elsewhere
@@ -173,20 +346,48 @@ unsafe fn tray_menu(hwnd: HWND) {
     DestroyMenu(menu);
 }
 
+unsafe fn about(hwnd: HWND) {
+    let text = tr(current_config().lang, "about-text").replace("{}", env!("CARGO_PKG_VERSION"));
+    MessageBoxW(hwnd, wide(&text).as_ptr(), wide("Radial").as_ptr(), MB_OK | MB_ICONINFORMATION);
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if overlay::handle(msg, wp, lp) {
         return 0;
     }
     match msg {
         WM_TRAY if lp as u32 & 0xFFFF == WM_RBUTTONUP => tray_menu(hwnd),
+        WM_TRAY if lp as u32 & 0xFFFF == WM_LBUTTONDBLCLK => settings::open(false),
         overlay::WM_DONE => {
-            let text = Box::from_raw(lp as *mut String);
-            balloon(hwnd, &text);
+            let (text, failed) = *Box::from_raw(lp as *mut (String, bool));
+            let cfg = current_config();
+            if cfg.notify.balloon() || failed {
+                balloon(hwnd, &text);
+            }
+            if cfg.notify.sound() {
+                MessageBeep(if failed { MB_ICONHAND } else { MB_ICONASTERISK });
+            }
         }
-        WM_COMMAND if wp & 0xFFFF == ID_QUIT => {
-            Shell_NotifyIconW(NIM_DELETE, &nid(hwnd));
-            PostQuitMessage(0);
-        }
+        WM_COMMAND => match wp & 0xFFFF {
+            ID_QUIT => {
+                Shell_NotifyIconW(NIM_DELETE, &nid(hwnd));
+                PostQuitMessage(0);
+            }
+            ID_SETTINGS => settings::open(false),
+            ID_PAUSE => {
+                PAUSED.fetch_xor(true, Relaxed);
+                TRACKER.with(|t| *t.borrow_mut() = Tracker::default());
+                PostMessageW(hwnd, overlay::WM_HIDE, 0, 0);
+                refresh_tray(hwnd);
+            }
+            ID_AUTOSTART => {
+                let mut c = current_config();
+                c.autostart = !c.autostart;
+                set_config(c);
+            }
+            ID_ABOUT => about(hwnd),
+            _ => {}
+        },
         WM_MOUSEACTIVATE => return MA_NOACTIVATE as LRESULT,
         // Explorer restarted: the tray icon must be added again.
         _ if msg == TASKBAR_CREATED.load(Relaxed) => add_tray(hwnd),
@@ -197,10 +398,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if let [_, flag, path] = args.as_slice() {
-        if flag == "--preview" {
-            return render::preview_png(path);
-        }
+    if render::cli(&args) || settings::cli(&args) {
+        return;
     }
     unsafe {
         CreateMutexW(null(), 0, wide("Local\\RadialMenu").as_ptr());
@@ -210,6 +409,16 @@ fn main() {
         ANY_SURFACE.store(std::env::var_os("RADIAL_ANY_SURFACE").is_some(), Relaxed);
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         OleInitialize(null());
+
+        let mut cfg = config::load();
+        let first_run = !cfg.onboarded;
+        if first_run {
+            cfg.lang = system_language();
+        }
+        let user = config::user_themes();
+        let look = Look::new(&cfg, &user);
+        TRIGGER.store(trigger_code(cfg.trigger), Relaxed);
+        APP.with(|a| *a.borrow_mut() = Some(App { cfg, user_themes: user, look }));
 
         let hinst = GetModuleHandleW(null());
         let cls = wide("RadialOverlay");
@@ -241,8 +450,12 @@ fn main() {
 
         let mh = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hinst, 0);
         let kh = SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), hinst, 0);
+        if first_run && std::env::var_os("RADIAL_NO_ONBOARDING").is_none() {
+            settings::open(true);
+        }
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            // Dialog-style keyboard handling is not needed; the settings window is custom drawn.
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

@@ -32,3 +32,4 @@ hover_lift = 5
 hover_grow = 3
 preview_a = #02130a
 preview_b = #0c4a34
+scan = 0.6

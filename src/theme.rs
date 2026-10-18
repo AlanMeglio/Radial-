@@ -127,6 +127,10 @@ pub struct Theme {
     pub saturation: f32,
     pub orbit: f32,
     pub ticks: bool,
+    /// CRT scanlines over the glass, 0..1.
+    pub scan: f32,
+    /// Distance in px of the inner highlight line from the sector edge.
+    pub inset: f32,
 
     // Geometry (logical pixels at size 1.0).
     pub ring: f32,
@@ -178,6 +182,8 @@ impl Theme {
             saturation: 1.35,
             orbit: 0.5,
             ticks: false,
+            scan: 0.0,
+            inset: 1.5,
             ring: 100.0,
             gap: 5.0,
             corner: 14.0,
@@ -228,6 +234,8 @@ impl Theme {
             "saturation" => self.saturation = f(v)?,
             "orbit" => self.orbit = f(v)?,
             "ticks" => self.ticks = b(v)?,
+            "scan" => self.scan = f(v)?,
+            "inset" => self.inset = f(v)?,
             "ring" => self.ring = f(v)?,
             "gap" => self.gap = f(v)?,
             "corner" => self.corner = f(v)?,
@@ -278,6 +286,8 @@ impl Theme {
         range("sheen", self.sheen, 0.0, 1.0)?;
         range("glow", self.glow, 0.0, 1.0)?;
         range("orbit", self.orbit, 0.0, 1.0)?;
+        range("scan", self.scan, 0.0, 1.0)?;
+        range("inset", self.inset, 0.5, 6.0)?;
         range("shadow_spread", self.shadow_spread, 0.0, 60.0)?;
         range("shadow_dy", self.shadow_dy, -30.0, 40.0)?;
         range("blur", self.blur, 0.0, 60.0)?;
@@ -328,6 +338,8 @@ impl Theme {
             ("blur", self.blur),
             ("saturation", self.saturation),
             ("orbit", self.orbit),
+            ("scan", self.scan),
+            ("inset", self.inset),
             ("ring", self.ring),
             ("gap", self.gap),
             ("corner", self.corner),

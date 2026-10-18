@@ -9,7 +9,7 @@ glass_top = #2e2b2ab4
 glass_bottom = #070606dc
 hub = #070606e2
 rim = #e8c27a58
-highlight = #fff0cc68
+
 shadow = #000000b8
 hover_fill = #e8c27a58
 hover_text = #fff6e0
@@ -30,3 +30,5 @@ hover_lift = 7
 hover_grow = 5
 preview_a = #1b1714
 preview_b = #4f3d28
+inset = 3.4
+highlight = #ffe9b890
