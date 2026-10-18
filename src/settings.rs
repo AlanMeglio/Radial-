@@ -805,10 +805,10 @@ fn rebuild_preview(ui: &mut Ui, replay: bool) {
 }
 
 fn set_kind(ui: &mut Ui, kind: usize) {
-    let sc = demo_scene(kind, None);
+    let sc = demo_scene(kind, None, ui.cfg.lang);
     let n = sc.slots.len();
     ui.prev.kind = kind;
-    ui.prev.scene = Scene { open: 1.0, ..Scene::new(sc.slots, sc.main, sc.sub) };
+    ui.prev.scene = Scene { open: 1.0, ..sc };
     ui.prev.appear = vec![Spring::default(); n];
     ui.prev.hover_sp = vec![Spring::default(); n];
     ui.prev.scene.appear = vec![0.0; n];
@@ -835,7 +835,7 @@ fn step_preview(ui: &mut Ui, dt: f32) -> bool {
         p.appear[i].step(target, th.stiffness, th.damping, dt);
         settled &= p.appear[i].settled(target) && go;
         p.scene.appear[i] = p.appear[i].x;
-        let ht = if Some(i) == p.hover { 1.0 } else { 0.0 };
+        let ht = if Some(i) == p.hover && p.scene.slots[i].enabled { 1.0 } else { 0.0 };
         p.hover_sp[i].step(ht, th.stiffness * 1.4, (th.damping + 0.25).min(1.0), dt);
         settled &= p.hover_sp[i].settled(ht);
         p.scene.hover[i] = p.hover_sp[i].x.clamp(0.0, 1.15);
@@ -878,14 +878,15 @@ fn set_hover_from_mouse(ui: &mut Ui, x: f32, y: f32) -> bool {
     let p = &ui.prev;
     let m = ui.look.m;
     let (dx, dy) = ((x - p.center.0) / p.dpi_eff, (y - p.center.1) / p.dpi_eff);
-    let hit = sector_at(dx, dy, p.scene.slots.len(), m.hub, m.hit_out).filter(|&i| p.scene.slots[i].enabled);
+    let hit = sector_at(dx, dy, p.scene.slots.len(), m.hub, m.hit_out);
     if hit == ui.prev.hover {
         return false;
     }
     ui.prev.hover = hit;
-    let sc = demo_scene(ui.prev.kind, hit);
+    let sc = demo_scene(ui.prev.kind, hit, ui.cfg.lang);
     ui.prev.scene.main = sc.main;
     ui.prev.scene.sub = sc.sub;
+    ui.prev.scene.caption = sc.caption;
     ui.prev.scene.main_accent = sc.main_accent;
     true
 }
@@ -1274,13 +1275,13 @@ unsafe fn build_ui(
     let look = Look::new(&cfg, &themes);
     let face = Face::load(FontKind::Variable, 520.0)?;
     let t = cfg.resolve(&theme::find(&cfg.theme, &themes));
-    let sc = demo_scene(8, None);
+    let sc = demo_scene(8, None, cfg.lang);
     let n = sc.slots.len();
     let prev = Preview {
         wall: None,
         menu: None,
         renderer: Renderer::new(Face::load(t.font, t.weight)),
-        scene: Scene { open: 0.0, ..Scene::new(sc.slots, sc.main, sc.sub) },
+        scene: Scene { open: 0.0, ..sc },
         appear: vec![Spring::default(); n],
         hover_sp: vec![Spring::default(); n],
         hover: None,
@@ -1397,9 +1398,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 ui.tracking = false;
                 ui.hot = None;
                 if ui.prev.hover.take().is_some() {
-                    let sc = demo_scene(ui.prev.kind, None);
+                    let sc = demo_scene(ui.prev.kind, None, ui.cfg.lang);
                     ui.prev.scene.main = sc.main;
                     ui.prev.scene.sub = sc.sub;
+                    ui.prev.scene.caption = sc.caption;
                     ui.prev.scene.main_accent = false;
                     start_timer(ui);
                 }
@@ -1517,14 +1519,14 @@ pub fn cli(args: &[String]) -> bool {
     let look = Look::new(&cfg, &themes);
     let t = cfg.resolve(&theme::find(&cfg.theme, &themes));
     let kind = get("--menu").and_then(|v| v.parse().ok()).unwrap_or(8);
-    let sc = demo_scene(kind, None);
+    let sc = demo_scene(kind, None, cfg.lang);
     let n = sc.slots.len();
     let Some(face) = Face::load(FontKind::Variable, 520.0) else { return true };
     let prev = Preview {
         wall: None,
         menu: None,
         renderer: Renderer::new(Face::load(t.font, t.weight)),
-        scene: Scene { open: 1.0, appear: vec![1.0; n], ..Scene::new(sc.slots, sc.main, sc.sub) },
+        scene: Scene { open: 1.0, appear: vec![1.0; n], ..sc },
         appear: vec![Spring { x: 1.0, v: 0.0 }; n],
         hover_sp: vec![Spring::default(); n],
         hover: None,
@@ -1566,10 +1568,11 @@ pub fn cli(args: &[String]) -> bool {
         ui.prev.hover = Some(i);
         ui.prev.hover_sp[i] = Spring { x: 1.0, v: 0.0 };
         ui.prev.scene.hover[i] = 1.0;
-        let sc = demo_scene(kind, Some(i));
+        let sc = demo_scene(kind, Some(i), ui.cfg.lang);
         ui.prev.scene.main = sc.main;
         ui.prev.scene.sub = sc.sub;
-        ui.prev.scene.main_accent = true;
+        ui.prev.scene.caption = sc.caption;
+        ui.prev.scene.main_accent = sc.main_accent;
     }
     draw_all(&mut ui);
     let img = image::RgbaImage::from_raw(w, h, ui.pm.data().to_vec()).expect("pixmap size");

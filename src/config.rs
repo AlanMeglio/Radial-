@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::ring::{RingKind, Switch};
 use crate::theme::{FontKind, Rgba, Theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +72,10 @@ pub struct Config {
     pub autostart: bool,
     pub lang: Lang,
     pub onboarded: bool,
+    /// How to flip between the conversion ring and the actions ring while dragging an image.
+    pub ring_switch: Switch,
+    /// Which ring an image drag opens with.
+    pub start_ring: RingKind,
 }
 
 pub const SIZE_RANGE: (f32, f32) = (0.7, 1.5);
@@ -102,6 +107,8 @@ impl Default for Config {
             autostart: false,
             lang: Lang::En,
             onboarded: false,
+            ring_switch: Switch::Both,
+            start_ring: RingKind::Convert,
         }
     }
 }
@@ -114,6 +121,8 @@ const COLLISIONS: [(&str, Collision); 3] =
 const NOTIFIES: [(&str, Notify); 4] =
     [("off", Notify::Off), ("balloon", Notify::Balloon), ("sound", Notify::Sound), ("both", Notify::Both)];
 const LANGS: [(&str, Lang); 2] = [("en", Lang::En), ("es", Lang::Es)];
+const SWITCHES: [(&str, Switch); 3] = [("both", Switch::Both), ("tab", Switch::Tab), ("hub", Switch::Hub)];
+const RINGS: [(&str, RingKind); 2] = [("convert", RingKind::Convert), ("actions", RingKind::Actions)];
 
 fn word<T: Copy>(table: &[(&'static str, T)], v: &str) -> Option<T> {
     table.iter().find(|(k, _)| *k == v.to_ascii_lowercase()).map(|(_, t)| *t)
@@ -185,6 +194,8 @@ impl Config {
             "autostart" => self.autostart = flag(v)?,
             "lang" => self.lang = word(&LANGS, v).ok_or_else(|| bad("language"))?,
             "onboarded" => self.onboarded = flag(v)?,
+            "ring_switch" => self.ring_switch = word(&SWITCHES, v).ok_or_else(|| bad("ring switch"))?,
+            "start_ring" => self.start_ring = word(&RINGS, v).ok_or_else(|| bad("ring"))?,
             _ => return Err(format!("unknown key `{key}`")),
         }
         Ok(())
@@ -197,7 +208,7 @@ impl Config {
             "# Radial settings. Edit freely; the Settings window rewrites this file.\n\
              theme = {}\naccent = {accent}\nsize = {}\nring = {}\ngap = {}\ncorner = {}\nglass = {}\nspeed = {}\n\
              font = {font}\ntrigger = {}\ndelay_ms = {}\nout_dir = {}\ncollision = {}\nnotify = {}\n\
-             autostart = {}\nlang = {}\nonboarded = {}\n",
+             autostart = {}\nlang = {}\nonboarded = {}\nring_switch = {}\nstart_ring = {}\n",
             self.theme,
             self.size,
             self.ring,
@@ -213,6 +224,8 @@ impl Config {
             self.autostart,
             name_of(&LANGS, self.lang),
             self.onboarded,
+            name_of(&SWITCHES, self.ring_switch),
+            name_of(&RINGS, self.start_ring),
         )
     }
 
@@ -416,6 +429,47 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("how3", "Drop it on a sector", "Suéltalo sobre un sector"),
     ("ms", "ms", "ms"),
     ("off", "Off", "Apagado"),
+    ("act-compress", "COMPRESS", "COMPRIMIR"),
+    ("act-metadata", "METADATA", "METADATOS"),
+    ("act-edit", "EDIT", "EDITAR"),
+    ("act-annotate", "ANNOTATE", "ANOTAR"),
+    ("act-addbg", "ADD BG", "FONDO"),
+    ("act-crop", "CROP", "RECORTAR"),
+    ("act-redact", "REDACT", "TACHAR"),
+    ("act-compress-hint", "Smaller file", "Más liviano"),
+    ("act-metadata-hint", "Strip EXIF", "Quita EXIF"),
+    ("act-edit-hint", "Rotate, tone", "Girar, tono"),
+    ("act-annotate-hint", "Draw on it", "Dibujar"),
+    ("act-addbg-hint", "Add backdrop", "Con fondo"),
+    ("act-crop-hint", "Trim edges", "Recortar"),
+    ("act-redact-hint", "Black out", "Tapar zonas"),
+    ("convert-to", "Convert to", "Convertir a"),
+    ("unavailable", "Unavailable", "No disponible"),
+    ("actions-title", "Actions", "Acciones"),
+    ("files-n", "{} files", "{} archivos"),
+    ("sw-both", "Tab or hub", "Tab o centro"),
+    ("sw-tab", "Tab", "Tab"),
+    ("sw-hub", "Hub", "Centro"),
+    ("go-actions", "{}: actions", "{}: acciones"),
+    ("go-convert", "{}: convert", "{}: convertir"),
+    ("why-one-file", "Drop a single image to use this", "Suelta una sola imagen para usar esto"),
+    ("why-formats", "Works on {} only", "Solo funciona con {}"),
+    ("compressed", "Compressed {}: {} to {} ({})", "Comprimido {}: {} a {} ({})"),
+    ("compressed-many", "Compressed {} files: {} to {} ({})", "Comprimidos {} archivos: {} a {} ({})"),
+    ("optimal", "{} is already as small as it gets ({})", "{} ya es lo más liviano posible ({})"),
+    ("meta-none", "No metadata found in {}", "No hay metadatos en {}"),
+    ("meta-done", "Saved {} (removed {} entries, {})", "Guardado {} (quitadas {} entradas, {})"),
+    (
+        "meta-gps",
+        "Saved {} without location data (removed {} entries, {})",
+        "Guardado {} sin datos de ubicación (quitadas {} entradas, {})",
+    ),
+    ("tab-ring", "Drag ring", "Anillo de arrastre"),
+    ("ring-switch", "Switch rings with", "Cambiar de anillo con"),
+    ("start-ring", "Image menu opens on", "El menú de imágenes abre en"),
+    ("ring-convert", "Convert", "Convertir"),
+    ("ring-actions", "Actions", "Acciones"),
+    ("sw-label-both", "Tab + hub", "Tab + centro"),
 ];
 
 /// Looks a UI string up; unknown keys give an empty string (caught by the unit tests, not at runtime).
@@ -456,10 +510,32 @@ mod tests {
             autostart: true,
             lang: Lang::Es,
             onboarded: true,
+            ring_switch: Switch::Hub,
+            start_ring: RingKind::Actions,
         };
         let (back, warns) = Config::parse(&c.to_text());
         assert_eq!(back, c);
         assert!(warns.is_empty());
+    }
+
+    #[test]
+    fn ring_settings_default_to_tab_or_hub_and_the_conversion_ring() {
+        let c = Config::default();
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, RingKind::Convert));
+        let (c, w) = Config::parse(
+            "ring_switch = tab
+start_ring = actions
+",
+        );
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Tab, RingKind::Actions));
+        assert!(w.is_empty());
+        let (c, w) = Config::parse(
+            "ring_switch = sideways
+start_ring = third
+",
+        );
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, RingKind::Convert));
+        assert_eq!(w.len(), 2);
     }
 
     #[test]

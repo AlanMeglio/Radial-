@@ -1,6 +1,5 @@
 //! Format table and output naming for the radial menu. The conversion work itself lives in `engine`.
 
-use crate::engine::{self, SourceKind, Target};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,9 +13,6 @@ pub enum Fmt {
     Bmp,
     Heic,
 }
-
-/// Menu order, clockwise from the top.
-pub const ALL: [Fmt; 8] = [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Avif, Fmt::Tiff, Fmt::Bmp, Fmt::Heic];
 
 impl Fmt {
     pub fn label(self) -> &'static str {
@@ -58,16 +54,6 @@ impl Fmt {
             _ => return None,
         })
     }
-
-    /// Can this machine write the format right now? The pure-Rust formats always can; HEIC and AVIF
-    /// depend on Windows codecs that may not be installed (probed once, see `engine::os`).
-    pub fn encodable(self) -> bool {
-        engine::target_availability(Target::Image(self)).is_available()
-    }
-
-    fn decodable(self) -> bool {
-        engine::source_availability(SourceKind::Image(self)).is_available()
-    }
 }
 
 /// `dir/stem.ext`, or `dir/stem (1).ext`, `(2)`... when taken. Never returns an existing path.
@@ -94,18 +80,6 @@ pub fn human_size(bytes: u64) -> String {
     format!("{v:.1} {}", UNITS[u])
 }
 
-/// Format of a file judged by its extension, when we can decode it.
-pub fn source_format(path: &Path) -> Option<Fmt> {
-    Fmt::from_ext(path.extension()?.to_str()?).filter(|f| f.decodable())
-}
-
-/// Converts `src` next to itself and returns the new path. Never overwrites.
-pub fn convert(src: &Path, to: Fmt) -> Result<PathBuf, String> {
-    let paths =
-        engine::convert_file(src, Target::Image(to), &engine::ConvertOptions::default()).map_err(|e| e.to_string())?;
-    paths.into_iter().next().ok_or_else(|| "the conversion produced no file".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,19 +96,9 @@ mod tests {
 
     #[test]
     fn every_format_round_trips_through_its_extension() {
-        for f in ALL {
+        for f in [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Avif, Fmt::Tiff, Fmt::Bmp, Fmt::Heic] {
             assert_eq!(Fmt::from_ext(f.ext()), Some(f));
             assert!(!f.label().is_empty());
-        }
-    }
-
-    #[test]
-    fn pure_rust_formats_are_always_encodable_and_os_codecs_follow_the_probe() {
-        for f in [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Tiff, Fmt::Bmp] {
-            assert!(f.encodable() && f.decodable(), "{f:?}");
-        }
-        for f in [Fmt::Avif, Fmt::Heic] {
-            assert_eq!(f.encodable(), crate::engine::os::can_encode(f).is_available(), "{f:?}");
         }
     }
 
@@ -156,36 +120,5 @@ mod tests {
         assert_eq!(human_size(1024), "1.0 KB");
         assert_eq!(human_size(1_153_434), "1.1 MB");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
-    }
-}
-
-#[cfg(test)]
-mod io_tests {
-    use super::*;
-
-    #[test]
-    fn converts_png_to_every_encodable_format_without_overwriting() {
-        let dir = std::env::temp_dir().join(format!("radial-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("a.png");
-        image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 30, 30, 128])).save(&src).unwrap();
-        let pure = [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Tiff, Fmt::Bmp];
-        for f in pure {
-            let out = convert(&src, f).unwrap();
-            assert!(out.exists(), "{:?}", f);
-            let again = convert(&src, f).unwrap();
-            assert_ne!(out, again);
-            assert!(image::open(&out).is_ok(), "{:?} output must decode", f);
-        }
-        // OS-codec formats either work or fail with a readable message, never panic or leave a file.
-        let before = std::fs::read_dir(&dir).unwrap().count();
-        for f in [Fmt::Avif, Fmt::Heic] {
-            match convert(&src, f) {
-                Ok(p) => assert!(p.exists() && f.encodable(), "{f:?}"),
-                Err(msg) => assert!(!f.encodable() && msg.contains(f.label()), "{f:?}: {msg}"),
-            }
-        }
-        assert!(std::fs::read_dir(&dir).unwrap().count() >= before);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -4,9 +4,9 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::time::Instant;
 
 use tiny_skia::Pixmap;
@@ -20,15 +20,23 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{mouse_event, MOUSEEVENTF_M
 use windows_sys::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::{plan_destination, tr, Config, Dest};
-use crate::convert::{self, Fmt, ALL};
+use crate::config::Lang;
+use crate::convert::human_size;
+use crate::engine::{self, SourceKind};
 use crate::geometry::{clamp_origin, sector_at};
-use crate::render::{Backdrop, Face, Look, Renderer, Scene, Slot};
+use crate::jobs;
+use crate::menus;
+use crate::render::{Backdrop, Face, Look, Renderer, Scene};
+use crate::ring::{build, ActionKind, Dwell, Env, Menu, Op, RingKind, Switch};
 
 pub const WM_SHOW: u32 = WM_APP + 10; // lparam: x | y << 16 (signed 16 bit each)
 pub const WM_HIDE: u32 = WM_APP + 11;
 pub const WM_HIDE_SOON: u32 = WM_APP + 12;
-pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<String> with the result text
+pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<(String, bool)> with the result text and a failure flag
+/// Posted by the keyboard hook when Tab is pressed during a drag: flips between the two rings.
+pub const WM_RING_TOGGLE: u32 = WM_APP + 14;
+/// wparam: index into `ActionKind::ALL`; lparam: Box<PathBuf>. Opens an action dialog once the drop has returned.
+pub const WM_OPEN_DIALOG: u32 = WM_APP + 15;
 
 const TIMER_FRAME: usize = 1;
 const TIMER_HIDE: usize = 2;
@@ -42,13 +50,20 @@ const COPY: u32 = 1;
 const NONE: u32 = 0;
 
 static HWND_MAIN: AtomicUsize = AtomicUsize::new(0);
+/// True while a menu is up and Tab should flip rings; read by the keyboard hook, which must not touch app state.
+static TAB_SWITCH: AtomicBool = AtomicBool::new(false);
 
 pub fn set_hwnd(h: HWND) {
     HWND_MAIN.store(h as usize, Relaxed);
 }
 
-fn hwnd() -> HWND {
+pub fn hwnd() -> HWND {
     HWND_MAIN.load(Relaxed) as HWND
+}
+
+/// Should the keyboard hook swallow Tab and flip rings?
+pub fn tab_wanted() -> bool {
+    TAB_SWITCH.load(Relaxed)
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -104,11 +119,23 @@ struct Ov {
     /// Seconds since the menu started opening.
     age: f32,
     target_open: f32,
+    /// Hovered sector that can be dropped on.
     hover: Option<usize>,
+    /// Hovered sector including greyed-out ones (they explain themselves in the pill).
+    hover_any: Option<usize>,
     files: Vec<PathBuf>,
     last: Instant,
     /// Seconds into the drop confirmation, if one is playing.
     confirm_t: Option<f32>,
+    kind: Option<SourceKind>,
+    menu: Option<Menu>,
+    switch: Switch,
+    lang: Lang,
+    size_txt: String,
+    dwell: Dwell,
+    /// Start of the drag, for the hub dwell clock.
+    clock: Instant,
+    last_pt: Option<POINTL>,
 }
 
 thread_local! {
@@ -146,7 +173,8 @@ unsafe fn capture_backdrop(
 pub unsafe fn show(x: i32, y: i32) {
     hide_now();
     let look = crate::current_look();
-    let speed = crate::current_config().speed;
+    let cfg = crate::current_config();
+    let speed = cfg.speed;
     let pt = POINT { x, y };
     let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
     let (mut dx, mut dy) = (96u32, 96u32);
@@ -199,9 +227,18 @@ pub unsafe fn show(x: i32, y: i32) {
         age: 0.0,
         target_open: 0.0,
         hover: None,
+        hover_any: None,
         files: vec![],
         last: Instant::now(),
         confirm_t: None,
+        kind: None,
+        menu: None,
+        switch: cfg.ring_switch,
+        lang: cfg.lang,
+        size_txt: String::new(),
+        dwell: Dwell::default(),
+        clock: Instant::now(),
+        last_pt: None,
     };
     OV.with(|c| *c.borrow_mut() = Some(ov));
     let h = hwnd();
@@ -212,6 +249,7 @@ pub unsafe fn show(x: i32, y: i32) {
 }
 
 unsafe fn hide_now() {
+    TAB_SWITCH.store(false, Relaxed);
     let h = hwnd();
     KillTimer(h, TIMER_FRAME);
     KillTimer(h, TIMER_HIDE);
@@ -225,6 +263,7 @@ unsafe fn hide_now() {
 }
 
 unsafe fn begin_close() {
+    TAB_SWITCH.store(false, Relaxed);
     let pending = with(|o| {
         if o.phase == Phase::Pending {
             return true;
@@ -319,7 +358,14 @@ unsafe fn tick() {
         let now = Instant::now();
         let dt = (now - o.last).as_secs_f32().min(0.05);
         o.last = now;
-        let settled = advance(o, dt);
+        // A resting pointer sends no new drag events, so the hub dwell is also driven by the frame timer.
+        let resting = o.phase == Phase::Open && o.dwell.pending();
+        if resting {
+            if let Some(pt) = o.last_pt {
+                hover_at(o, pt);
+            }
+        }
+        let settled = advance(o, dt) && !(resting && o.dwell.pending());
         present(o);
         if o.phase == Phase::Closing && (o.scene.open <= 0.0 && (o.confirm_t.is_none() || settled)) {
             Some(true)
@@ -367,6 +413,23 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
             cancel_delay();
             SetTimer(hwnd(), TIMER_HIDE, 400, None);
         }
+        WM_RING_TOGGLE => {
+            let flipped = with(|o| {
+                o.phase == Phase::Open && o.menu.as_ref().is_some_and(|m| m.switchable) && {
+                    toggle_ring(o);
+                    true
+                }
+            });
+            if flipped == Some(true) {
+                start_timer();
+            }
+        }
+        WM_OPEN_DIALOG => {
+            let path = *Box::from_raw(lp as *mut PathBuf);
+            if let Some(a) = ActionKind::ALL.get(wp) {
+                crate::dialogs::open(*a, path);
+            }
+        }
         WM_TIMER if wp == TIMER_FRAME => tick(),
         WM_TIMER if wp == TIMER_DELAY => {
             KillTimer(hwnd(), TIMER_DELAY);
@@ -390,55 +453,84 @@ unsafe fn cancel_delay() {
 
 // ---------- Menu model ----------
 
-fn size_text(files: &[PathBuf]) -> String {
+fn size_text(files: &[PathBuf], lang: Lang) -> String {
     match files {
-        [one] => std::fs::metadata(one).map(|m| convert::human_size(m.len())).unwrap_or_default(),
-        many => format!("{} files", many.len()),
+        [one] => std::fs::metadata(one).map(|m| human_size(m.len())).unwrap_or_default(),
+        many => jobs::fill(crate::config::tr(lang, "files-n"), &[&many.len().to_string()]),
     }
 }
 
-fn idle_texts(src: Fmt, files: &[PathBuf]) -> (String, String) {
-    (src.label().into(), size_text(files))
+/// The menu for `kind` on this machine: what the engine can read and write right now.
+fn menu_for(kind: SourceKind, ring: RingKind, files: usize) -> Menu {
+    let env = Env { target: &engine::target_availability, source: &engine::source_availability };
+    build(kind, ring, files, &env)
 }
 
-fn build_scene(src: Fmt, files: &[PathBuf]) -> Scene {
-    let slots: Vec<Slot> = ALL.iter().map(|f| Slot { label: f.label(), enabled: f.encodable() && *f != src }).collect();
-    let (main, sub) = idle_texts(src, files);
-    Scene::new(slots, main, sub)
+/// Installs `menu` as the live ring: scene, sector springs and the baked glass for its sector count.
+fn install_menu(o: &mut Ov, kind: SourceKind, menu: Menu) {
+    let open = o.scene.open;
+    o.scene = menus::scene(kind, &menu, &o.size_txt, o.switch, o.lang);
+    o.scene.open = open;
+    let n = o.scene.slots.len();
+    o.appear = vec![Spring::default(); n];
+    o.hover_sp = vec![Spring::default(); n];
+    o.renderer.prepare(&o.look, o.dpi, o.side as u32, o.backdrop.as_ref(), n);
+    o.kind = Some(kind);
+    o.menu = Some(menu);
+    o.hover = None;
+    o.hover_any = None;
+    o.age = 0.0;
+    o.last = Instant::now();
 }
 
-/// Sector under the screen point, relative to the current menu.
-fn sector_for(o: &Ov, pt: POINTL) -> Option<usize> {
+/// Flips between the conversion ring and the actions ring; the sectors bloom in again.
+fn toggle_ring(o: &mut Ov) {
+    let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return };
+    let next = menu.kind.other();
+    let fresh = menu_for(kind, next, o.files.len());
+    install_menu(o, kind, fresh);
+}
+
+/// Offset of a screen point from the menu centre, in logical pixels.
+fn offset(o: &Ov, pt: POINTL) -> (f32, f32) {
     let m = o.look.m;
     let cx = o.origin.0 as f32 + m.center * o.dpi;
     let cy = o.origin.1 as f32 + m.center * o.dpi;
-    sector_at((pt.x as f32 - cx) / o.dpi, (pt.y as f32 - cy) / o.dpi, o.scene.slots.len(), m.hub, m.hit_out)
+    ((pt.x as f32 - cx) / o.dpi, (pt.y as f32 - cy) / o.dpi)
 }
 
-/// Updates hover state for a drag position; returns the drop effect to show.
+/// Updates hover state for a drag position; returns the drop effect to show and whether anything visible changed.
 fn hover_at(o: &mut Ov, pt: POINTL) -> (u32, bool) {
     if o.phase != Phase::Open {
         return (NONE, false);
     }
-    let hit = sector_for(o, pt);
-    let hit = hit.filter(|&i| o.scene.slots[i].enabled);
-    let changed = hit != o.hover;
-    o.hover = hit;
-    match hit {
-        Some(i) => {
-            o.scene.main = o.scene.slots[i].label.into();
-            o.scene.sub = "Convert to".into();
-            o.scene.main_accent = true;
-        }
-        None => {
-            if let Some(src) = o.files.first().and_then(|f| convert::source_format(f)) {
-                let (main, sub) = idle_texts(src, &o.files);
-                o.scene.main = main;
-                o.scene.sub = sub;
-                o.scene.main_accent = false;
-            }
-        }
+    o.last_pt = Some(pt);
+    let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return (NONE, false) };
+    let m = o.look.m;
+    let (dx, dy) = offset(o, pt);
+    let on_hub = dx.hypot(dy) < m.hub && menu.switchable && o.switch.hub();
+    let (progress, flip) = o.dwell.update(on_hub, o.clock.elapsed().as_millis() as u32);
+    // While the pointer rests on the hub the frame timer must keep running to advance the dwell.
+    let mut changed = (progress - o.scene.dwell).abs() > 0.002 || o.dwell.pending();
+    o.scene.dwell = progress;
+    if flip {
+        o.scene.dwell = 0.0;
+        toggle_ring(o);
+        return (NONE, true);
     }
+    let any = sector_at(dx, dy, o.scene.slots.len(), m.hub, m.hit_out);
+    let hit = any.filter(|&i| menu.items.get(i).is_some_and(|it| it.enabled));
+    if any != o.hover_any {
+        let texts = match any {
+            Some(i) => menus::hover(menu, i, o.switch, o.lang),
+            None => menus::idle(kind, menu, &o.size_txt, o.switch, o.lang),
+        };
+        menus::apply(&mut o.scene, texts);
+        changed = true;
+    }
+    changed |= hit != o.hover;
+    o.hover = hit;
+    o.hover_any = any;
     (if hit.is_some() { COPY } else { NONE }, changed)
 }
 
@@ -526,20 +618,22 @@ unsafe extern "system" fn drag_enter(
     effect: *mut u32,
 ) -> i32 {
     let files = read_files(data);
-    let src = files.first().and_then(|f| convert::source_format(f));
     *effect = NONE;
-    let Some(src) = src else { return 0 };
+    let Some(kind) = files.first().and_then(|f| engine::detect(f)) else { return 0 };
+    let cfg = crate::current_config();
     let opened = with(|o| {
-        o.scene = build_scene(src, &files);
-        let n = o.scene.slots.len();
-        o.appear = vec![Spring::default(); n];
-        o.hover_sp = vec![Spring::default(); n];
-        o.renderer.prepare(&o.look, o.dpi, o.side as u32, o.backdrop.as_ref(), n);
+        o.switch = cfg.ring_switch;
+        o.lang = cfg.lang;
+        o.size_txt = size_text(&files, cfg.lang);
         o.files = files;
+        let wanted = if matches!(kind, SourceKind::Image(_)) { cfg.start_ring } else { RingKind::Convert };
+        let menu = menu_for(kind, wanted, o.files.len());
+        TAB_SWITCH.store(menu.switchable && o.switch.tab(), Relaxed);
+        install_menu(o, kind, menu);
         o.phase = Phase::Open;
         o.target_open = 1.0;
-        o.age = 0.0;
-        o.last = Instant::now();
+        o.clock = Instant::now();
+        o.dwell = Dwell::default();
         *effect = hover_at(o, pt).0;
     });
     if opened.is_some() {
@@ -575,72 +669,41 @@ unsafe extern "system" fn on_drop(_: *mut c_void, _data: *mut c_void, _keys: u32
         o.confirm_t = Some(0.0);
         o.scene.confirm = Some(idx);
         o.scene.pulse = 0.001;
+        o.scene.dwell = 0.0;
         o.last = Instant::now();
-        Some((ALL[idx], o.files.clone()))
+        let op = o.menu.as_ref()?.items.get(idx)?.op;
+        Some((op, o.files.clone()))
     })
     .flatten();
-    if let Some((fmt, files)) = job {
+    if let Some((op, files)) = job {
         *effect = COPY;
+        TAB_SWITCH.store(false, Relaxed);
         start_timer();
-        let h = hwnd() as usize;
-        let cfg = crate::current_config();
-        std::thread::spawn(move || run_job(h, fmt, files, cfg));
+        run(op, files);
     } else {
         begin_close();
     }
     0
 }
 
-/// Moves `from` to `to`, falling back to copy + delete across volumes.
-fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::rename(from, to).or_else(|_| std::fs::copy(from, to).and_then(|_| std::fs::remove_file(from)))
-}
-
-/// Applies the output folder and name-collision settings to a freshly converted file.
-fn place(source: &Path, result: PathBuf, cfg: &Config) -> Result<Option<PathBuf>, String> {
-    let out = cfg.out_path();
-    match plan_destination(source, &result, out.as_deref(), cfg.collision, |p| p.exists()) {
-        Dest::Keep(p) => Ok(Some(p)),
-        Dest::Move(p) => move_file(&result, &p).map(|_| Some(p)).map_err(|e| e.to_string()),
-        Dest::Replace(p) => {
-            let _ = std::fs::remove_file(&p);
-            move_file(&result, &p).map(|_| Some(p)).map_err(|e| e.to_string())
+/// Starts the chosen operation. Conversions and the immediate actions run on a worker thread; the dialogs open
+/// from the message loop once this drop call has returned to the drag source.
+unsafe fn run(op: Op, files: Vec<PathBuf>) {
+    let cfg = crate::current_config();
+    match op {
+        Op::Convert(target) => {
+            std::thread::spawn(move || jobs::convert(target, files, cfg));
         }
-        Dest::Discard => {
-            let _ = std::fs::remove_file(&result);
-            Ok(None)
+        Op::Action(a) if a.is_immediate() => {
+            std::thread::spawn(move || jobs::immediate(a, files, cfg));
         }
-    }
-}
-
-/// Converts on a worker thread and reports the outcome to the UI thread.
-fn run_job(h: usize, fmt: Fmt, files: Vec<PathBuf>, cfg: Config) {
-    let mut ok = Vec::new();
-    let mut skipped = Vec::new();
-    let mut errs = Vec::new();
-    for f in &files {
-        match convert::convert(f, fmt).and_then(|p| place(f, p, &cfg)) {
-            Ok(Some(p)) => ok.push(p),
-            Ok(None) => skipped.push(f.clone()),
-            Err(e) => errs.push(e),
-        }
-    }
-    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let l = cfg.lang;
-    let text = match (ok.as_slice(), errs.first(), skipped.first()) {
-        (_, Some(e), _) => tr(l, "failed").replace("{}", e),
-        ([one], None, _) => tr(l, "saved").replace("{}", &name(one)),
-        ([], None, Some(s)) => tr(l, "skipped").replace("{}", &name(s)),
-        (_, None, _) => tr(l, "converted").replacen("{}", &ok.len().to_string(), 1).replacen("{}", fmt.label(), 1),
-    };
-    let failed = !errs.is_empty();
-    let boxed = Box::into_raw(Box::new((text, failed)));
-    unsafe {
-        if PostMessageW(h as HWND, WM_DONE, 0, boxed as LPARAM) == 0 {
-            drop(Box::from_raw(boxed));
+        Op::Action(a) => {
+            let Some(first) = files.into_iter().next() else { return };
+            let idx = ActionKind::ALL.iter().position(|x| *x == a).unwrap_or(0);
+            let boxed = Box::into_raw(Box::new(first));
+            if PostMessageW(hwnd(), WM_OPEN_DIALOG, idx, boxed as LPARAM) == 0 {
+                drop(Box::from_raw(boxed));
+            }
         }
     }
 }

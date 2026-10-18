@@ -6,10 +6,14 @@
 
 mod config;
 mod convert;
+mod dialogs;
 mod engine;
 mod geometry;
+mod jobs;
+mod menus;
 mod overlay;
 mod render;
+mod ring;
 mod settings;
 mod theme;
 mod trigger;
@@ -42,6 +46,8 @@ const ID_ABOUT: usize = 5;
 static ANY_SURFACE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static PAUSED: AtomicBool = AtomicBool::new(false);
+/// Tab is held down (so key repeat does not flip the ring over and over).
+static TAB_DOWN: AtomicBool = AtomicBool::new(false);
 /// 0 shift, 1 ctrl, 2 alt, 3 none; read by the hook procedures, which must not touch the app state.
 static TRIGGER: AtomicU32 = AtomicU32::new(0);
 
@@ -245,6 +251,16 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
 unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && !PAUSED.load(Relaxed) {
         let k = &*(lp as *const KBDLLHOOKSTRUCT);
+        // While a menu is up Tab flips between the rings. It is swallowed so the drag source never sees it.
+        if k.vkCode == VK_TAB as u32 && overlay::tab_wanted() {
+            let down = matches!(wp as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+            if down && !TAB_DOWN.swap(true, Relaxed) {
+                PostMessageW(overlay_hwnd(), overlay::WM_RING_TOGGLE, 0, 0);
+            } else if !down {
+                TAB_DOWN.store(false, Relaxed);
+            }
+            return 1;
+        }
         if trigger_keys().is_some_and(|keys| keys.contains(&k.vkCode)) {
             let down = matches!(wp as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             let act = TRACKER.with(|t| t.borrow_mut().shift_changed(down));
@@ -423,6 +439,7 @@ fn main() {
         ANY_SURFACE.store(std::env::var_os("RADIAL_ANY_SURFACE").is_some(), Relaxed);
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         OleInitialize(null());
+        engine::warm_up();
 
         let mut cfg = config::load();
         let first_run = !cfg.onboarded;

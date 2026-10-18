@@ -75,6 +75,7 @@ impl Icon {
 pub struct Slot {
     pub label: &'static str,
     pub enabled: bool,
+    pub icon: Icon,
 }
 
 pub struct Scene {
@@ -92,6 +93,12 @@ pub struct Scene {
     /// Drop confirmation: 0 = idle, 0..1 expanding ring, centred on the hub.
     pub pulse: f32,
     pub confirm: Option<usize>,
+    /// Text of the pill under the ring: the key hint, or why the hovered sector is greyed out.
+    pub caption: String,
+    /// `(current, total)` rings, drawn as dots in the pill; `None` when the file has a single ring.
+    pub pager: Option<(usize, usize)>,
+    /// Progress 0..1 of resting on the hub to flip rings, drawn as an arc around the hub.
+    pub dwell: f32,
 }
 
 impl Scene {
@@ -107,6 +114,9 @@ impl Scene {
             main_accent: false,
             pulse: 0.0,
             confirm: None,
+            caption: String::new(),
+            pager: None,
+            dwell: 0.0,
         }
     }
 
@@ -278,6 +288,22 @@ fn sector_path(g: Geo, a: f32, half: f32, half_gap: f32, r_in: f32, r_out: f32, 
     arc(&mut pb, &f, c_ri, c, psi_r, t_ri + PI);
     arc(&mut pb, &f, (0.0, 0.0), r_in, t_ri, t_li);
     arc(&mut pb, &f, c_li, c, t_li + PI, psi_l + TAU);
+    pb.close();
+    pb.finish()
+}
+
+/// Pill shape (device pixels).
+fn capsule(x: f32, y: f32, w: f32, h: f32) -> Option<Path> {
+    let r = (h / 2.0).min(w / 2.0);
+    let k = r * 0.5523;
+    let mut pb = PathBuilder::new();
+    pb.move_to(x + r, y);
+    pb.line_to(x + w - r, y);
+    pb.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
+    pb.cubic_to(x + w, y + r + k, x + w - r + k, y + h, x + w - r, y + h);
+    pb.line_to(x + r, y + h);
+    pb.cubic_to(x + r - k, y + h, x, y + r + k, x, y + r);
+    pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
     pb.close();
     pb.finish()
 }
@@ -970,7 +996,7 @@ impl Renderer {
             let ta = a_body * if slot.enabled { 1.0 } else { 0.38 };
             let (ix, iy) = (r_mid_pt.0, r_mid_pt.1 - 11.0 * k * look.scale);
             let isz = (22.0 + 3.0 * h) * look.scale * k;
-            if let Some(path) = icon_path(Icon::for_label(slot.label)) {
+            if let Some(path) = icon_path(slot.icon) {
                 let sc = isz / 24.0;
                 let tf = Transform::from_row(sc, 0.0, 0.0, sc, ix - isz / 2.0, iy - isz / 2.0);
                 pm.stroke_path(path, &solid(txt, ta), &stroke(1.6), tf, None);
@@ -1017,6 +1043,12 @@ impl Renderer {
                     );
                 }
             }
+            if scene.dwell > 0.01 {
+                let end = (scene.dwell.min(1.0) * TAU).clamp(0.05, TAU - 0.001);
+                if let Some(p) = ring_arc(g, dial, 0.0, end) {
+                    pm.stroke_path(&p, &solid(th.accent, fade), &stroke(k * 2.6), Transform::identity(), None);
+                }
+            }
             if let Some(face) = self.face.as_mut() {
                 let maxw = hub_r * 2.0 * 0.74 * k;
                 let mut px = 19.0 * look.scale * k;
@@ -1030,6 +1062,52 @@ impl Renderer {
                 face.draw(pm, &main, g.cx, g.cy - 6.5 * k * look.scale, px, mc, fade, tr * px);
                 let spx = 9.5 * look.scale * k;
                 face.draw(pm, &scene.sub, g.cx, g.cy + 12.0 * k * look.scale, spx, th.text_dim, fade, 0.06 * spx);
+            }
+        }
+
+        // 4b. The pill under the ring: key hint and ring dots, or the reason a sector is greyed out.
+        if !scene.caption.is_empty() {
+            if let Some(face) = self.face.as_mut() {
+                let u = k * look.scale;
+                let px = 10.5 * u;
+                let dots = scene.pager.map_or(0, |(_, n)| n);
+                let dots_w = if dots > 0 { (dots as f32 * 10.0 + 4.0) * u } else { 0.0 };
+                let maxw = side * 0.92 - 28.0 * u - dots_w;
+                let mut text = scene.caption.clone();
+                if face.measure(&text, px, 0.0) > maxw {
+                    while text.chars().count() > 4 && face.measure(&text, px, 0.0) > maxw {
+                        text.pop();
+                    }
+                    text.pop();
+                    text.push('\u{2026}');
+                }
+                let tw = face.measure(&text, px, 0.0);
+                let (pw, ph) = (tw + dots_w + 24.0 * u, 22.0 * u);
+                let cy = g.cy + (m.r_out + 52.0 * look.scale) * k * zoom;
+                let (x0, y0) = (g.cx - pw / 2.0, cy - ph / 2.0);
+                if let Some(cap) = capsule(x0, y0, pw, ph) {
+                    let glass = glass_paint(&baked.glass, fade * 0.96);
+                    pm.fill_path(&cap, &glass, FillRule::Winding, Transform::identity(), None);
+                    pm.fill_path(
+                        &cap,
+                        &solid(th.glass_bottom, 0.35 * fade),
+                        FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
+                    pm.stroke_path(&cap, &solid(th.rim, 0.8 * fade), &HAIR, Transform::identity(), None);
+                }
+                if let Some((cur, n)) = scene.pager {
+                    for d in 0..n {
+                        let dx = x0 + 12.0 * u + d as f32 * 10.0 * u;
+                        if let Some(dot) = PathBuilder::from_circle(dx, cy, if d == cur { 3.0 * u } else { 2.2 * u }) {
+                            let c = if d == cur { th.accent } else { th.text_dim };
+                            pm.fill_path(&dot, &solid(c, fade), FillRule::Winding, Transform::identity(), None);
+                        }
+                    }
+                }
+                let tx = x0 + 12.0 * u + dots_w + tw / 2.0;
+                face.draw(pm, &text, tx, cy, px, th.text, 0.92 * fade, 0.0);
             }
         }
 
@@ -1124,20 +1202,33 @@ pub fn wallpaper(pm: &mut Pixmap, th: &Theme) {
     }
 }
 
-/// The three demo menus of the product.
-pub fn demo_scene(kind: usize, hover: Option<usize>) -> Scene {
-    let (labels, main, sub): (&[&'static str], &str, &str) = match kind {
-        4 => (&["DOCX", "JPG", "PNG", "TXT"], "PDF", "1.1 MB"),
-        7 => (&["COMPRESS", "METADATA", "EDIT", "ANNOTATE", "ADD BG", "CROP", "REDACT"], "Actions", "photo.png"),
-        _ => (&["PNG", "JPG", "WEBP", "GIF", "AVIF", "TIFF", "BMP", "HEIC"], "PNG", "1.1 MB"),
+/// The three demo menus of the product (PNG image: 8 sectors, PDF: 4, image actions: 7), built through the same
+/// code as the live overlay. AVIF is shown unavailable so previews also show a greyed-out sector.
+pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) -> Scene {
+    use crate::convert::Fmt;
+    use crate::engine::{Availability, SourceKind, Target};
+    use crate::ring::{build, Env, RingKind, Switch};
+    let env = Env {
+        target: &|t| match t {
+            Target::Image(Fmt::Avif) => {
+                Availability::Unavailable("AVIF encoding needs an AV1 encoder, which Windows does not include".into())
+            }
+            _ => Availability::Available,
+        },
+        source: &|_| Availability::Available,
     };
-    let slots: Vec<Slot> = labels.iter().map(|l| Slot { label: l, enabled: !matches!(*l, "AVIF" | "HEIC") }).collect();
-    let mut sc = Scene::new(slots, main.into(), sub.into()).settled();
-    if let Some(i) = hover.filter(|&i| i < labels.len()) {
-        sc.hover[i] = 1.0;
-        sc.main = labels[i].into();
-        sc.sub = if kind == 7 { "Apply".into() } else { "Convert to".into() };
-        sc.main_accent = true;
+    let (src, ring) = match kind {
+        4 => (SourceKind::Pdf, RingKind::Convert),
+        7 => (SourceKind::Image(Fmt::Png), RingKind::Actions),
+        _ => (SourceKind::Image(Fmt::Png), RingKind::Convert),
+    };
+    let menu = build(src, ring, 1, &env);
+    let mut sc = crate::menus::scene(src, &menu, "1.1 MB", Switch::Both, lang).settled();
+    if let Some(i) = hover.filter(|&i| i < menu.items.len()) {
+        if menu.items[i].enabled {
+            sc.hover[i] = 1.0;
+        }
+        crate::menus::apply(&mut sc, crate::menus::hover(&menu, i, Switch::Both, lang));
     }
     sc
 }
@@ -1159,7 +1250,7 @@ pub fn compose_preview(
     let bd = Backdrop::new(wall.data(), side, side, false, blur, look.theme.saturation);
     let mut menu = Pixmap::new(side, side)?;
     let mut r = Renderer::new(face);
-    let scene = demo_scene(kind, hover);
+    let scene = demo_scene(kind, hover, cfg.lang);
     r.prepare(&look, dpi, side, bd.as_ref(), scene.slots.len());
     r.render(&mut menu, &scene, &look, dpi);
     wall.draw_pixmap(0, 0, menu.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
@@ -1177,7 +1268,7 @@ fn bench(cfg: &Config, user: &[Theme], dpi: f32, face: Option<Face>) {
     let backdrop_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let Some(mut pm) = Pixmap::new(side, side) else { return };
     let mut r = Renderer::new(face);
-    let mut sc = demo_scene(8, None);
+    let mut sc = demo_scene(8, None, crate::config::Lang::En);
     let t0 = std::time::Instant::now();
     r.prepare(&look, dpi, side, bd.as_ref(), 8);
     let prepare_ms = t0.elapsed().as_secs_f64() * 1000.0;
