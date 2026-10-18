@@ -831,7 +831,7 @@ impl Renderer {
             }
             return;
         }
-        if self.baked.as_ref().is_none_or(|b| b.side != pm.width()) {
+        if !matches!(&self.baked, Some(b) if b.side == pm.width()) {
             self.baked = bake(look, dpi, pm.width(), None, n);
         }
         let Some(baked) = self.baked.as_ref() else { return };

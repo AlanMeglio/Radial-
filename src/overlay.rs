@@ -321,7 +321,7 @@ unsafe fn tick() {
         o.last = now;
         let settled = advance(o, dt);
         present(o);
-        if o.phase == Phase::Closing && (o.scene.open <= 0.0 && o.confirm_t.is_none_or(|_| settled)) {
+        if o.phase == Phase::Closing && (o.scene.open <= 0.0 && (o.confirm_t.is_none() || settled)) {
             Some(true)
         } else {
             Some(settled)
