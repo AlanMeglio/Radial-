@@ -418,6 +418,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
     0
 }
 
+/// `radial --open crop pic.png`: just that dialog, no tray icon or hooks; the process ends when it closes.
+unsafe fn open_standalone(action: ring::ActionKind, file: std::path::PathBuf) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    let cfg = config::load();
+    let user = config::user_themes();
+    let look = Look::new(&cfg, &user);
+    APP.with(|a| *a.borrow_mut() = Some(App { cfg, user_themes: user, look }));
+    dialogs::set_standalone();
+    dialogs::open(action, file);
+    let mut msg: MSG = zeroed();
+    while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if render::cli(&args) || settings::cli(&args) || dialogs::cli(&args) {
@@ -426,6 +442,15 @@ fn main() {
     if let [_, flag, state] = args.as_slice() {
         if flag == "--autostart" {
             set_autostart(state == "on");
+            return;
+        }
+    }
+    if let [_, flag, action, file] = args.as_slice() {
+        if flag == "--open" {
+            match ring::ActionKind::from_name(action).filter(|a| !a.is_immediate()) {
+                Some(a) => unsafe { open_standalone(a, file.into()) },
+                None => eprintln!("usage: radial --open crop|bg|edit|annotate|redact <image>"),
+            }
             return;
         }
     }

@@ -50,6 +50,20 @@ impl ActionKind {
         matches!(self, ActionKind::Compress | ActionKind::Metadata)
     }
 
+    /// Parses the command line / environment spelling of an action (`crop`, `addbg`, ...).
+    pub fn from_name(s: &str) -> Option<ActionKind> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "compress" => ActionKind::Compress,
+            "metadata" => ActionKind::Metadata,
+            "edit" => ActionKind::Edit,
+            "annotate" => ActionKind::Annotate,
+            "addbg" | "bg" => ActionKind::AddBg,
+            "crop" => ActionKind::Crop,
+            "redact" => ActionKind::Redact,
+            _ => return None,
+        })
+    }
+
     /// Key of the localized sector label (see `config::STRINGS`).
     pub fn label_key(self) -> &'static str {
         match self {
@@ -187,11 +201,13 @@ impl Switch {
 /// Resting on the hub for this long flips the ring.
 pub const DWELL_MS: u32 = 520;
 
-/// Hub dwell state machine: one flip per visit, re-armed once the pointer leaves the hub.
+/// Hub dwell state machine: one flip per visit. The menu opens with the pointer on the hub, so a dwell only counts
+/// once the pointer has been off the hub at least once; leaving the hub re-arms it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Dwell {
     since: Option<u32>,
     fired: bool,
+    armed: bool,
 }
 
 impl Dwell {
@@ -203,7 +219,10 @@ impl Dwell {
     /// Feeds the pointer state at time `now_ms`; returns the progress `0..=1` and whether the ring should flip now.
     pub fn update(&mut self, on_hub: bool, now_ms: u32) -> (f32, bool) {
         if !on_hub {
-            *self = Dwell::default();
+            *self = Dwell { armed: true, ..Dwell::default() };
+            return (0.0, false);
+        }
+        if !self.armed {
             return (0.0, false);
         }
         let start = *self.since.get_or_insert(now_ms);
@@ -330,6 +349,23 @@ mod tests {
     }
 
     #[test]
+    fn action_names_parse_for_the_command_line_and_cover_every_action() {
+        assert_eq!(ActionKind::from_name("CROP"), Some(ActionKind::Crop));
+        assert_eq!(ActionKind::from_name("bg"), Some(ActionKind::AddBg));
+        assert_eq!(ActionKind::from_name("nope"), None);
+        for (name, a) in [
+            ("compress", ActionKind::Compress),
+            ("metadata", ActionKind::Metadata),
+            ("edit", ActionKind::Edit),
+            ("annotate", ActionKind::Annotate),
+            ("addbg", ActionKind::AddBg),
+            ("redact", ActionKind::Redact),
+        ] {
+            assert_eq!(ActionKind::from_name(name), Some(a));
+        }
+    }
+
+    #[test]
     fn ring_kinds_flip() {
         assert_eq!(RingKind::Convert.other(), RingKind::Actions);
         assert_eq!(RingKind::Actions.other().other(), RingKind::Actions);
@@ -345,7 +381,7 @@ mod tests {
     #[test]
     fn resting_on_the_hub_flips_once_and_rearms_after_leaving() {
         let mut d = Dwell::default();
-        assert_eq!(d.update(false, 0), (0.0, false));
+        assert_eq!(d.update(false, 0), (0.0, false), "off the hub: armed");
         assert_eq!(d.update(true, 100), (0.0, false));
         let (p, flip) = d.update(true, 100 + DWELL_MS / 2);
         assert!((p - 0.5).abs() < 0.01 && !flip);
@@ -357,9 +393,22 @@ mod tests {
     }
 
     #[test]
+    fn a_menu_that_opens_under_a_resting_pointer_does_not_flip_until_the_pointer_has_left_the_hub() {
+        let mut d = Dwell::default();
+        for t in [0, 100, DWELL_MS, DWELL_MS * 4] {
+            assert_eq!(d.update(true, t), (0.0, false), "disarmed at t={t}");
+            assert!(!d.pending());
+        }
+        d.update(false, DWELL_MS * 5);
+        d.update(true, DWELL_MS * 5 + 10);
+        assert!(d.update(true, DWELL_MS * 6 + 10).1, "armed after leaving");
+    }
+
+    #[test]
     fn pending_is_true_only_while_waiting_on_the_hub() {
         let mut d = Dwell::default();
         assert!(!d.pending());
+        d.update(false, 0);
         d.update(true, 0);
         assert!(d.pending());
         d.update(true, DWELL_MS);
@@ -371,6 +420,7 @@ mod tests {
     #[test]
     fn a_short_pass_over_the_hub_does_not_flip() {
         let mut d = Dwell::default();
+        d.update(false, 0);
         d.update(true, 0);
         assert!(!d.update(true, DWELL_MS - 1).1);
         d.update(false, DWELL_MS);

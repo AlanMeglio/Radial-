@@ -464,7 +464,6 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
         "Saved {} without location data (removed {} entries, {})",
         "Guardado {} sin datos de ubicación (quitadas {} entradas, {})",
     ),
-    ("tab-ring", "Drag ring", "Anillo de arrastre"),
     ("ring-switch", "Switch rings with", "Cambiar de anillo con"),
     ("start-ring", "Image menu opens on", "El menú de imágenes abre en"),
     ("ring-convert", "Convert", "Convertir"),

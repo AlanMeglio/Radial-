@@ -37,6 +37,8 @@ pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<(String, bool)> with the re
 pub const WM_RING_TOGGLE: u32 = WM_APP + 14;
 /// wparam: index into `ActionKind::ALL`; lparam: Box<PathBuf>. Opens an action dialog once the drop has returned.
 pub const WM_OPEN_DIALOG: u32 = WM_APP + 15;
+/// Test knob: wparam is an index into `ActionKind::ALL`; opens that dialog on the file named by `RADIAL_OPEN_FILE`.
+pub const WM_OPEN_TEST: u32 = WM_APP + 16;
 
 const TIMER_FRAME: usize = 1;
 const TIMER_HIDE: usize = 2;
@@ -422,6 +424,11 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
             });
             if flipped == Some(true) {
                 start_timer();
+            }
+        }
+        WM_OPEN_TEST => {
+            if let (Some(a), Some(f)) = (ActionKind::ALL.get(wp), std::env::var_os("RADIAL_OPEN_FILE")) {
+                crate::dialogs::open(*a, PathBuf::from(f));
             }
         }
         WM_OPEN_DIALOG => {

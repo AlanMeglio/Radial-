@@ -22,6 +22,7 @@ use crate::config::*;
 use crate::geometry::sector_at;
 use crate::overlay::Spring;
 use crate::render::{self, clamp01, demo_scene, linear, solid, stroke, Backdrop, Face, Look, Renderer, Scene};
+use crate::ring::{RingKind, Switch};
 use crate::theme::{self, FontKind, Rgba, Theme};
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -111,6 +112,8 @@ enum Sg {
     Notify,
     Lang,
     Menu,
+    RingSwitch,
+    StartRing,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -522,14 +525,14 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
     p.label(tr(l, "trigger"), RX, y);
     let tsel = TRIGGERS.iter().position(|(_, t)| *t == cfg.trigger).unwrap_or(0);
     p.seg(Sg::Trigger, y + 18.0, &["Shift", "Ctrl", "Alt", tr(l, "key-none")], tsel);
-    y += 58.0;
+    y += 52.0;
     let (t, v) = (slider_t(cfg, Sl::Delay), slider_text(cfg, Sl::Delay, l));
     p.slider(Sl::Delay, y, tr(l, "delay"), t, &v);
     y += 40.0;
     p.label(tr(l, "output"), RX, y);
     let custom = cfg.out_dir.is_some();
     p.seg(Sg::OutMode, y + 18.0, &[tr(l, "out-source"), tr(l, "out-custom")], custom as usize);
-    y += 58.0;
+    y += 52.0;
     if let Some(dir) = &cfg.out_dir {
         let r = [RX, y - 4.0, RW - 96.0, 28.0];
         p.fill(r, 8.0, p.pal.card);
@@ -548,12 +551,20 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
         .position(|c| *c == cfg.collision)
         .unwrap_or(0);
     p.seg(Sg::Collision, y + 18.0, &[tr(l, "col-rename"), tr(l, "col-over"), tr(l, "col-skip")], csel);
-    y += 58.0;
+    y += 52.0;
     p.label(tr(l, "notify"), RX, y);
     let nsel =
         [Notify::Off, Notify::Balloon, Notify::Sound, Notify::Both].iter().position(|c| *c == cfg.notify).unwrap_or(0);
     p.seg(Sg::Notify, y + 18.0, &[tr(l, "not-off"), tr(l, "not-balloon"), tr(l, "not-sound"), tr(l, "not-both")], nsel);
-    y += 58.0;
+    y += 52.0;
+    p.label(tr(l, "ring-switch"), RX, y);
+    let ssel = [Switch::Both, Switch::Tab, Switch::Hub].iter().position(|c| *c == cfg.ring_switch).unwrap_or(0);
+    p.seg(Sg::RingSwitch, y + 18.0, &[tr(l, "sw-label-both"), tr(l, "sw-tab"), tr(l, "sw-hub")], ssel);
+    y += 52.0;
+    p.label(tr(l, "start-ring"), RX, y);
+    let rsel = (cfg.start_ring == RingKind::Actions) as usize;
+    p.seg(Sg::StartRing, y + 18.0, &[tr(l, "ring-convert"), tr(l, "ring-actions")], rsel);
+    y += 52.0;
     draw_autostart(p, y, cfg);
     y += 38.0;
     p.label(tr(l, "language"), RX, y);
@@ -1080,6 +1091,8 @@ fn do_act(ui: &mut Ui, act: Act) {
                     ui.cfg.collision = [Collision::Rename, Collision::Overwrite, Collision::Skip][i.min(2)]
                 }
                 Sg::Notify => ui.cfg.notify = [Notify::Off, Notify::Balloon, Notify::Sound, Notify::Both][i.min(3)],
+                Sg::RingSwitch => ui.cfg.ring_switch = [Switch::Both, Switch::Tab, Switch::Hub][i.min(2)],
+                Sg::StartRing => ui.cfg.start_ring = [RingKind::Convert, RingKind::Actions][i.min(1)],
                 Sg::Lang => ui.cfg.lang = if i == 0 { Lang::En } else { Lang::Es },
                 Sg::Menu => {
                     set_kind(ui, [8, 4, 7][i.min(2)]);
@@ -1117,6 +1130,8 @@ fn do_act(ui: &mut Ui, act: Act) {
                 notify: o.notify,
                 autostart: o.autostart,
                 delay_ms: o.delay_ms,
+                ring_switch: o.ring_switch,
+                start_ring: o.start_ring,
                 onboarded: true,
                 ..Config::default()
             };

@@ -177,6 +177,13 @@ struct Shell {
     last_tick: Instant,
 }
 
+static STANDALONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// In `--open` mode the process quits when the last dialog closes.
+pub fn set_standalone() {
+    STANDALONE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 thread_local! {
     static SHELLS: RefCell<HashMap<isize, Shell>> = RefCell::new(HashMap::new());
 }
@@ -670,6 +677,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 drop(sh); // the dialog, its pixmaps and the font go with it
             }
             DestroyWindow(hwnd);
+            if STANDALONE.load(std::sync::atomic::Ordering::Relaxed) && SHELLS.with(|m| m.borrow().is_empty()) {
+                PostQuitMessage(0);
+            }
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),

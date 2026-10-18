@@ -1124,6 +1124,16 @@ impl Renderer {
                 pm.stroke_path(&ring, &solid(bright, 0.95 * a), &thin, Transform::identity(), None);
             }
         }
+
+        // Hit testing: Windows lets mouse input fall through the fully transparent pixels of a layered window, and
+        // a drag that falls through leaves the drop target. Whatever the sectors are doing (blooming in again after
+        // a ring switch, hidden by the entrance animation), the whole interactive disc stays faintly opaque.
+        let reach = Geo { cx: side / 2.0, cy: side / 2.0, u: k };
+        if let Some(path) = circle_path(reach, m.hit_out) {
+            let mut paint = solid(Rgba(0, 0, 0, 255), 0.012);
+            paint.blend_mode = BlendMode::DestinationOver;
+            pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        }
     }
 }
 
