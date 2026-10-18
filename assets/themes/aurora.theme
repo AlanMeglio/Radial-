@@ -25,3 +25,4 @@ hover_lift = 11
 hover_grow = 8
 preview_a = #0e2c52
 preview_b = #6a3fa8
+rim_tint = 0.7

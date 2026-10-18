@@ -1576,3 +1576,55 @@ pub fn cli(args: &[String]) -> bool {
     img.save(out).expect("save settings png");
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sliders_round_trip_through_their_ranges() {
+        let mut c = Config::default();
+        for id in [Sl::Size, Sl::Ring, Sl::Gap, Sl::Corner, Sl::Glass, Sl::Speed, Sl::Delay] {
+            for t in [0.0, 0.25, 0.5, 1.0] {
+                set_slider(&mut c, id, t);
+                let back = slider_t(&c, id);
+                assert!((back - t).abs() < 0.06, "{id:?} {t} -> {back}");
+            }
+        }
+    }
+
+    #[test]
+    fn slider_values_stay_inside_the_config_ranges() {
+        let mut c = Config::default();
+        set_slider(&mut c, Sl::Size, 7.0);
+        set_slider(&mut c, Sl::Delay, -3.0);
+        assert_eq!((c.size, c.delay_ms), (SIZE_RANGE.1, 0));
+        set_slider(&mut c, Sl::Delay, 1.0);
+        assert_eq!(c.delay_ms, DELAY_MAX);
+    }
+
+    #[test]
+    fn hue_slider_sets_a_custom_accent_and_reads_it_back() {
+        let mut c = Config::default();
+        set_slider(&mut c, Sl::Hue, 0.5);
+        let a = c.accent.expect("accent set");
+        assert!((hue_of(a) - 180.0).abs() < 2.0);
+        assert!((hue_of(Rgba(255, 0, 0, 255))).abs() < 0.1);
+        assert!((hue_of(Rgba(0, 0, 255, 255)) - 240.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn palette_avoids_accents_that_vanish() {
+        let white = Rgba(255, 255, 255, 255);
+        let black = Rgba(0, 0, 0, 255);
+        assert_ne!(palette(false, white).accent, white);
+        assert_ne!(palette(true, black).accent, black);
+        assert_eq!(palette(true, white).accent, white);
+    }
+
+    #[test]
+    fn rounded_rect_handles_degenerate_sizes() {
+        assert!(rrect(0.0, 0.0, 10.0, 10.0, 99.0).is_some());
+        assert!(rrect(0.0, 0.0, 10.0, 10.0, 0.0).is_some());
+    }
+}

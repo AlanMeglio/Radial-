@@ -831,7 +831,7 @@ impl Renderer {
             }
             return;
         }
-        if self.baked.as_ref().map_or(true, |b| b.side != pm.width()) {
+        if self.baked.as_ref().is_none_or(|b| b.side != pm.width()) {
             self.baked = bake(look, dpi, pm.width(), None, n);
         }
         let Some(baked) = self.baked.as_ref() else { return };
@@ -946,10 +946,12 @@ impl Renderer {
             }
             // Rim light and an inner highlight, both brighter towards the light.
             let rim_c = th.rim.mix(th.accent, h);
+            let tinted = |c: Rgba| Rgba(c.0, c.1, c.2, th.rim.3.max(70));
+            let (r0, r1) = (rim_c.mix(tinted(th.accent), th.rim_tint), rim_c.mix(tinted(th.accent2), th.rim_tint));
             let rim = linear(
                 light_from,
                 light_to,
-                &[(0.0, rim_c.mix(white, 0.35 - 0.35 * h), 1.6 * a_body), (1.0, rim_c, 0.5 * a_body)],
+                &[(0.0, r0.mix(white, 0.35 - 0.35 * h - 0.2 * th.rim_tint), 1.6 * a_body), (1.0, r1, 0.5 * a_body)],
             );
             // Width-1 strokes take tiny-skia's hairline fast path (the general stroker is several times slower).
             pm.stroke_path(&s.path, &rim, &HAIR, Transform::identity(), None);
@@ -991,6 +993,18 @@ impl Renderer {
             let dial = hub_r - 7.0 * look.scale;
             if let Some(p) = circle_path(g, dial) {
                 pm.stroke_path(&p, &solid(th.text, 0.10 * fade), &stroke(k * 0.8), Transform::identity(), None);
+            }
+            if th.ticks {
+                let mut pb = PathBuilder::new();
+                for t in 0..48 {
+                    let a = TAU * t as f32 / 48.0;
+                    let (p0, p1) = (g.polar(dial - 1.0, a), g.polar(dial - 3.5, a));
+                    pb.move_to(p0.0, p0.1);
+                    pb.line_to(p1.0, p1.1);
+                }
+                if let Some(p) = pb.finish() {
+                    pm.stroke_path(&p, &solid(th.text, 0.22 * fade), &HAIR, Transform::identity(), None);
+                }
             }
             for s in secs.iter().filter(|s| s.h > 0.02) {
                 if let Some(p) = ring_arc(g, dial, s.a - 0.5, s.a + 0.5) {
@@ -1102,7 +1116,7 @@ pub fn wallpaper(pm: &mut Pixmap, th: &Theme) {
         }
     }
     for (x, y, r, c) in
-        [(0.30, 0.46, 0.035, crisp), (0.74, 0.50, 0.05, dark), (0.46, 0.10, 0.03, crisp), (0.40, 0.80, 0.04, dark)]
+        [(0.30, 0.46, 0.035, crisp), (0.74, 0.50, 0.05, dark), (0.46, 0.10, 0.03, crisp), (0.90, 0.60, 0.04, dark)]
     {
         if let Some(path) = PathBuilder::from_circle(x * w, y * h, r * w) {
             pm.fill_path(&path, &solid(c, 0.7), FillRule::Winding, Transform::identity(), None);
@@ -1221,44 +1235,161 @@ pub fn cli(args: &[String]) -> bool {
     if let Some(out) = get("--sheet") {
         let themes: Vec<Theme> = theme::builtin().into_iter().chain(user.iter().cloned()).collect();
         let cols = 4usize;
-        let rows = themes.len().div_ceil(cols);
-        let cell = Look::new(&cfg, &user).side_px(dpi) as usize;
+        // Rings differ per theme, so every canvas is scaled to the smallest one to get a regular grid.
+        let sides: Vec<u32> = themes
+            .iter()
+            .map(|t| {
+                let mut c = Config::default();
+                c.apply_theme(t);
+                Look::new(&c, &user).side_px(dpi)
+            })
+            .collect();
+        let cell = sides.iter().copied().min().unwrap_or(400) as usize;
         let label_h = (44.0 * dpi) as usize;
+        let slots = themes.len() + 1; // one extra tile invites contributions
+        let rows = slots.div_ceil(cols);
         let (w, h) = (cols * cell, rows * (cell + label_h));
         let Some(mut sheet) = Pixmap::new(w as u32, h as u32) else { return true };
         sheet.fill(Color::from_rgba8(14, 15, 20, 255));
+        let mut caption = Face::load(FontKind::Variable, 600.0);
+        let mut put_caption = |sheet: &mut Pixmap, text: &str, x: usize, y: usize| {
+            if let Some(f) = caption.as_mut() {
+                let px = 15.0 * dpi;
+                let (cx, cy) = ((x + cell / 2) as f32, (y + cell) as f32 + label_h as f32 / 2.0);
+                f.draw(sheet, &text.to_uppercase(), cx, cy, px, Rgba(235, 238, 246, 255), 1.0, px * 0.16);
+            }
+        };
         for (i, t) in themes.iter().enumerate() {
             let mut c = Config::default();
             c.apply_theme(t);
             let kind = [8, 4, 7][i % 3];
             let hv = Some([1, 2, 3][i % 3]);
-            if let Some(pm) = compose_preview(&c, &user, kind, hv, dpi, face(&c)) {
-                let (x, y) = ((i % cols) * cell, (i / cols) * (cell + label_h));
-                sheet.draw_pixmap(
-                    x as i32,
-                    y as i32,
-                    pm.as_ref(),
-                    &PixmapPaint::default(),
-                    Transform::identity(),
-                    None,
+            let Some(pm) = compose_preview(&c, &user, kind, hv, dpi, face(&c)) else { continue };
+            let (x, y) = ((i % cols) * cell, (i / cols) * (cell + label_h));
+            let k = cell as f32 / pm.width() as f32;
+            let paint = PixmapPaint { quality: FilterQuality::Bicubic, ..PixmapPaint::default() };
+            sheet.draw_pixmap(0, 0, pm.as_ref(), &paint, Transform::from_row(k, 0.0, 0.0, k, x as f32, y as f32), None);
+            put_caption(&mut sheet, &t.label, x, y);
+        }
+        // The last tile: how to add a theme.
+        let (x, y) = ((themes.len() % cols) * cell, (themes.len() / cols) * (cell + label_h));
+        put_caption(&mut sheet, "Add yours", x, y);
+        if let Some(f) = caption.as_mut() {
+            let px = 17.0 * dpi;
+            let lines = ["Drop a .theme file into", "%APPDATA%\\radial\\themes", "or add one to assets/themes"];
+            for (i, line) in lines.iter().enumerate() {
+                let c = Rgba(150, 158, 178, 255);
+                f.draw(
+                    &mut sheet,
+                    line,
+                    (x + cell / 2) as f32,
+                    (y + cell / 2) as f32 + (i as f32 - 1.0) * 30.0 * dpi,
+                    px,
+                    c,
+                    1.0,
+                    0.0,
                 );
-                if let Some(mut f) = Face::load(FontKind::Variable, 600.0) {
-                    let px = 15.0 * dpi;
-                    f.draw(
-                        &mut sheet,
-                        &t.label.to_uppercase(),
-                        (x + cell / 2) as f32,
-                        (y + cell) as f32 + label_h as f32 / 2.0,
-                        px,
-                        Rgba(235, 238, 246, 255),
-                        1.0,
-                        px * 0.16,
-                    );
-                }
             }
         }
         save_png(&sheet, &out);
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_icon_parses_into_a_path() {
+        for i in ICONS {
+            assert!(icon_path(i).is_some(), "{i:?}");
+        }
+    }
+
+    #[test]
+    fn icon_path_language_rejects_garbage() {
+        assert!(parse_icon("M 1 2 L 3").is_none());
+        assert!(parse_icon("X 1 2").is_none());
+        assert!(parse_icon("M1 2 L3 4").is_some(), "letters need no spaces after them");
+    }
+
+    #[test]
+    fn menu_labels_get_specific_icons() {
+        for l in ["PNG", "JPG", "WEBP", "GIF", "TIFF", "BMP", "AVIF", "HEIC", "PDF", "DOCX", "TXT"] {
+            assert_ne!(Icon::for_label(l), Icon::Folder, "{l}");
+        }
+        for l in ["COMPRESS", "METADATA", "EDIT", "ANNOTATE", "ADD BG", "CROP", "REDACT"] {
+            assert_ne!(Icon::for_label(l), Icon::Folder, "{l}");
+        }
+        assert_eq!(Icon::for_label("jpeg"), Icon::Photo);
+        assert_eq!(Icon::for_label("???"), Icon::Folder);
+    }
+
+    #[test]
+    fn sector_paths_build_for_every_menu_size_and_corner() {
+        let g = Geo { cx: 250.0, cy: 250.0, u: 1.0 };
+        for n in [3usize, 4, 7, 8, 12] {
+            for corner in [0.0, 14.0, 40.0] {
+                for gap in [0.0, 5.0, 24.0] {
+                    let p = sector_path(g, 0.3, PI / n as f32, gap / 2.0, 70.0, 170.0, corner);
+                    let b = p.expect("path").bounds();
+                    assert!(b.width() > 10.0 && b.height() > 10.0, "n={n} corner={corner} gap={gap}");
+                    assert!(b.left() >= 0.0 && b.right() <= 500.0, "stays on the canvas");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn upscale_keeps_flat_colour_and_size() {
+        let mut low = Pixmap::new(5, 5).unwrap();
+        low.fill(Color::from_rgba8(200, 100, 50, 255));
+        let big = upscale(&low, 18, 17).unwrap();
+        assert_eq!((big.width(), big.height()), (18, 17));
+        assert!(big.data().chunks_exact(4).all(|p| p == [200, 100, 50, 255]));
+    }
+
+    #[test]
+    fn blur_keeps_flat_areas_and_spreads_edges() {
+        let mut flat = vec![80u8; 20 * 20];
+        blur3(&mut flat, 20, 20, 1, 6.0);
+        assert!(flat.iter().all(|&v| v == 80));
+        let mut dot = vec![0u8; 21 * 21];
+        dot[10 * 21 + 10] = 255;
+        blur3(&mut dot, 21, 21, 1, 6.0);
+        assert!(dot[10 * 21 + 10] < 255 && dot[10 * 21 + 13] > 0, "energy spreads to neighbours");
+    }
+
+    #[test]
+    fn backdrop_rejects_short_buffers() {
+        assert!(Backdrop::new(&[0; 16], 8, 8, true, 4.0, 1.0).is_none());
+        assert!(Backdrop::new(&vec![0u8; 8 * 8 * 4], 8, 8, true, 4.0, 1.3).is_some());
+    }
+
+    #[test]
+    fn text_is_measured_and_tracked() {
+        if let Some(f) = Face::load(FontKind::Variable, 600.0) {
+            let (a, b) = (f.measure("PDF", 20.0, 0.0), f.measure("PDF", 20.0, 3.0));
+            assert!(a > 10.0 && (b - a - 6.0).abs() < 0.01, "tracking adds (n-1) gaps");
+            assert_eq!(f.measure("", 20.0, 3.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_frame_renders_visible_pixels_for_every_theme() {
+        for t in theme::builtin() {
+            let mut cfg = Config::default();
+            cfg.apply_theme(&t);
+            let pm = compose_preview(&cfg, &[], 8, Some(1), 1.0, None).expect("preview");
+            let look = Look::new(&cfg, &[]);
+            assert_eq!(pm.width(), look.side_px(1.0), "{}", t.name);
+            // The centre of the hub is glass, so it differs from the wallpaper under it.
+            let mut wall = Pixmap::new(pm.width(), pm.height()).unwrap();
+            wallpaper(&mut wall, &look.theme);
+            let c = pm.width() / 2;
+            assert_ne!(pm.pixel(c, c), wall.pixel(c, c), "{}", t.name);
+        }
+    }
 }

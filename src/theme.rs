@@ -127,6 +127,8 @@ pub struct Theme {
     pub saturation: f32,
     pub orbit: f32,
     pub ticks: bool,
+    /// How much the rim light takes the accent colours instead of white-ish, 0..1.
+    pub rim_tint: f32,
     /// CRT scanlines over the glass, 0..1.
     pub scan: f32,
     /// Distance in px of the inner highlight line from the sector edge.
@@ -182,6 +184,7 @@ impl Theme {
             saturation: 1.35,
             orbit: 0.5,
             ticks: false,
+            rim_tint: 0.0,
             scan: 0.0,
             inset: 1.5,
             ring: 100.0,
@@ -234,6 +237,7 @@ impl Theme {
             "saturation" => self.saturation = f(v)?,
             "orbit" => self.orbit = f(v)?,
             "ticks" => self.ticks = b(v)?,
+            "rim_tint" => self.rim_tint = f(v)?,
             "scan" => self.scan = f(v)?,
             "inset" => self.inset = f(v)?,
             "ring" => self.ring = f(v)?,
@@ -286,6 +290,7 @@ impl Theme {
         range("sheen", self.sheen, 0.0, 1.0)?;
         range("glow", self.glow, 0.0, 1.0)?;
         range("orbit", self.orbit, 0.0, 1.0)?;
+        range("rim_tint", self.rim_tint, 0.0, 1.0)?;
         range("scan", self.scan, 0.0, 1.0)?;
         range("inset", self.inset, 0.5, 6.0)?;
         range("shadow_spread", self.shadow_spread, 0.0, 60.0)?;
@@ -338,6 +343,7 @@ impl Theme {
             ("blur", self.blur),
             ("saturation", self.saturation),
             ("orbit", self.orbit),
+            ("rim_tint", self.rim_tint),
             ("scan", self.scan),
             ("inset", self.inset),
             ("ring", self.ring),

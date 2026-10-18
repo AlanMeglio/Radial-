@@ -6,3 +6,4 @@ accent2 = #5ad2ff
 hover_fill = #6ef2c9a0
 preview_a = #243b6b
 preview_b = #8a4f9e
+rim_tint = 0.5

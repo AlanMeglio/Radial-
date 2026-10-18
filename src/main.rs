@@ -6,6 +6,7 @@
 
 mod config;
 mod convert;
+mod engine;
 mod geometry;
 mod overlay;
 mod render;
@@ -106,7 +107,7 @@ pub fn set_config(cfg: Config) {
     let user = user_themes_cached();
     let look = Look::new(&cfg, &user);
     TRIGGER.store(trigger_code(cfg.trigger), Relaxed);
-    let autostart_changed = APP.with(|a| a.borrow().as_ref().map_or(true, |a| a.cfg.autostart != cfg.autostart));
+    let autostart_changed = APP.with(|a| a.borrow().as_ref().is_none_or(|a| a.cfg.autostart != cfg.autostart));
     if autostart_changed {
         set_autostart(cfg.autostart);
     }
@@ -223,7 +224,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     t.button_down(p, eligible)
                 }
                 WM_MOUSEMOVE => {
-                    let held = trigger_keys().map_or(true, |k| GetAsyncKeyState(k[0] as i32) < 0);
+                    let held = trigger_keys().is_none_or(|k| GetAsyncKeyState(k[0] as i32) < 0);
                     t.moved(p, held)
                 }
                 WM_LBUTTONUP => {

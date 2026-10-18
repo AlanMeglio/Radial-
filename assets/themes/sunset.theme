@@ -25,3 +25,4 @@ stiffness = 230
 damping = 0.58
 preview_a = #ff9a5a
 preview_b = #7a3fa0
+rim_tint = 0.45
