@@ -1,5 +1,6 @@
-//! Format table, output naming and the image conversion engine.
+//! Format table and output naming for the radial menu. The conversion work itself lives in `engine`.
 
+use crate::engine::{self, SourceKind, Target};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,13 +59,14 @@ impl Fmt {
         })
     }
 
-    /// AVIF and HEIC have no lean pure-Rust encoder, so they stay visibly disabled.
+    /// Can this machine write the format right now? The pure-Rust formats always can; HEIC and AVIF
+    /// depend on Windows codecs that may not be installed (probed once, see `engine::os`).
     pub fn encodable(self) -> bool {
-        !matches!(self, Fmt::Avif | Fmt::Heic)
+        engine::target_availability(Target::Image(self)).is_available()
     }
 
     fn decodable(self) -> bool {
-        self.encodable()
+        engine::source_availability(SourceKind::Image(self)).is_available()
     }
 }
 
@@ -99,57 +101,9 @@ pub fn source_format(path: &Path) -> Option<Fmt> {
 
 /// Converts `src` next to itself and returns the new path. Never overwrites.
 pub fn convert(src: &Path, to: Fmt) -> Result<PathBuf, String> {
-    use image::ImageFormat;
-    use std::io::BufWriter;
-
-    let img = image::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let fmt = match to {
-        Fmt::Png => ImageFormat::Png,
-        Fmt::Jpg => ImageFormat::Jpeg,
-        Fmt::Webp => ImageFormat::WebP,
-        Fmt::Gif => ImageFormat::Gif,
-        Fmt::Tiff => ImageFormat::Tiff,
-        Fmt::Bmp => ImageFormat::Bmp,
-        Fmt::Avif | Fmt::Heic => return Err(format!("{} output is not supported yet", to.label())),
-    };
-    // JPEG has no alpha: flatten onto white instead of failing or leaving black halos.
-    let img = if to == Fmt::Jpg { flatten_on_white(&img) } else { img };
-    let dir = src.parent().unwrap_or(Path::new("."));
-    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("converted");
-    // create_new closes the race between picking a name and creating the file.
-    for _ in 0..16 {
-        let out = unique_path(dir, stem, to.ext(), |p| p.exists());
-        let file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&out) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("{}: {e}", out.display())),
-        };
-        let mut w = BufWriter::new(file);
-        return match img.write_to(&mut w, fmt) {
-            Ok(()) => Ok(out),
-            Err(e) => {
-                drop(w);
-                let _ = std::fs::remove_file(&out);
-                Err(format!("{}: {e}", out.display()))
-            }
-        };
-    }
-    Err("could not pick a free output name".into())
-}
-
-fn flatten_on_white(img: &image::DynamicImage) -> image::DynamicImage {
-    if !img.color().has_alpha() {
-        return img.clone();
-    }
-    let mut rgba = img.to_rgba8();
-    for p in rgba.pixels_mut() {
-        let a = p[3] as u32;
-        for c in &mut p.0[..3] {
-            *c = ((*c as u32 * a + 255 * (255 - a)) / 255) as u8;
-        }
-        p[3] = 255;
-    }
-    image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(rgba).to_rgb8())
+    let paths =
+        engine::convert_file(src, Target::Image(to), &engine::ConvertOptions::default()).map_err(|e| e.to_string())?;
+    paths.into_iter().next().ok_or_else(|| "the conversion produced no file".to_string())
 }
 
 #[cfg(test)]
@@ -175,9 +129,13 @@ mod tests {
     }
 
     #[test]
-    fn only_pure_rust_formats_are_encodable() {
-        assert!(Fmt::Png.encodable() && Fmt::Webp.encodable() && Fmt::Tiff.encodable());
-        assert!(!Fmt::Avif.encodable() && !Fmt::Heic.encodable());
+    fn pure_rust_formats_are_always_encodable_and_os_codecs_follow_the_probe() {
+        for f in [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Tiff, Fmt::Bmp] {
+            assert!(f.encodable() && f.decodable(), "{f:?}");
+        }
+        for f in [Fmt::Avif, Fmt::Heic] {
+            assert_eq!(f.encodable(), crate::engine::os::can_encode(f).is_available(), "{f:?}");
+        }
     }
 
     #[test]
@@ -211,14 +169,23 @@ mod io_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("a.png");
         image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 30, 30, 128])).save(&src).unwrap();
-        for f in ALL.into_iter().filter(|f| f.encodable()) {
+        let pure = [Fmt::Png, Fmt::Jpg, Fmt::Webp, Fmt::Gif, Fmt::Tiff, Fmt::Bmp];
+        for f in pure {
             let out = convert(&src, f).unwrap();
             assert!(out.exists(), "{:?}", f);
             let again = convert(&src, f).unwrap();
             assert_ne!(out, again);
             assert!(image::open(&out).is_ok(), "{:?} output must decode", f);
         }
-        assert!(convert(&src, Fmt::Avif).is_err());
+        // OS-codec formats either work or fail with a readable message, never panic or leave a file.
+        let before = std::fs::read_dir(&dir).unwrap().count();
+        for f in [Fmt::Avif, Fmt::Heic] {
+            match convert(&src, f) {
+                Ok(p) => assert!(p.exists() && f.encodable(), "{f:?}"),
+                Err(msg) => assert!(!f.encodable() && msg.contains(f.label()), "{f:?}: {msg}"),
+            }
+        }
+        assert!(std::fs::read_dir(&dir).unwrap().count() >= before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
