@@ -1,0 +1,27 @@
+# Aurora: deep indigo glass with a green-to-violet northern-lights glow and bouncy motion.
+name = aurora
+label = Aurora
+accent = #7cf4c8
+accent2 = #a07bff
+glass_top = #2d4486a0
+glass_bottom = #0a0f34cc
+hub = #090d2ad8
+rim = #bfe8ff44
+highlight = #c8f0ff90
+shadow = #04061c9a
+hover_fill = #7cf4c8a0
+glow = 1.0
+sheen = 0.55
+blur = 28
+saturation = 1.9
+orbit = 0.6
+ring = 104
+gap = 6
+corner = 22
+stiffness = 190
+damping = 0.5
+stagger = 0.05
+hover_lift = 11
+hover_grow = 8
+preview_a = #0e2c52
+preview_b = #6a3fa8

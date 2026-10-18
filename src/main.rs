@@ -2,10 +2,12 @@
 //! Radial: drag a file in Explorer, hold Shift, drop it on a sector of the radial menu to convert it.
 //! Tray app. Idle cost is zero: only low-level hooks and the message loop run until a drag starts.
 
+mod config;
 mod convert;
 mod geometry;
 mod overlay;
 mod render;
+mod theme;
 mod trigger;
 
 use std::cell::RefCell;

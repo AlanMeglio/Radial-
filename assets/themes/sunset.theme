@@ -1,0 +1,27 @@
+# Sunset: plum glass, a warm orange-to-pink accent, very round corners.
+name = sunset
+label = Sunset
+accent = #ff9a5a
+accent2 = #ff4f8b
+text = #fff3ec
+text_dim = #fff3ec99
+glass_top = #8c3a63b4
+glass_bottom = #2a0f2cd0
+hub = #260c26dc
+rim = #ffd0b044
+highlight = #ffd9c078
+shadow = #1a061499
+hover_fill = #ff7a5ab8
+hover_text = #ffffff
+glow = 0.9
+sheen = 0.5
+blur = 24
+saturation = 1.6
+orbit = 0.5
+ring = 98
+gap = 5
+corner = 28
+stiffness = 230
+damping = 0.58
+preview_a = #ff9a5a
+preview_b = #7a3fa0
