@@ -61,6 +61,37 @@ pub enum Annotation {
     },
 }
 
+impl Annotation {
+    /// The same annotation for an image `k` times as large: every coordinate, width and font size is multiplied.
+    /// The UI draws on a downscaled preview and saves on the full image.
+    pub fn scaled(&self, k: f32) -> Annotation {
+        let p = |q: Pt| (q.0 * k, q.1 * k);
+        match self {
+            Annotation::Stroke { points, color, width } => {
+                Annotation::Stroke { points: points.iter().map(|&q| p(q)).collect(), color: *color, width: width * k }
+            }
+            Annotation::Line { from, to, color, width } => {
+                Annotation::Line { from: p(*from), to: p(*to), color: *color, width: width * k }
+            }
+            Annotation::Arrow { from, to, color, width } => {
+                Annotation::Arrow { from: p(*from), to: p(*to), color: *color, width: width * k }
+            }
+            Annotation::Rect { from, to, color, width, fill } => {
+                Annotation::Rect { from: p(*from), to: p(*to), color: *color, width: width * k, fill: *fill }
+            }
+            Annotation::Ellipse { from, to, color, width, fill } => {
+                Annotation::Ellipse { from: p(*from), to: p(*to), color: *color, width: width * k, fill: *fill }
+            }
+            Annotation::Highlight { from, to, color } => {
+                Annotation::Highlight { from: p(*from), to: p(*to), color: *color }
+            }
+            Annotation::Text { pos, text, size, color } => {
+                Annotation::Text { pos: p(*pos), text: text.clone(), size: size * k, color: *color }
+            }
+        }
+    }
+}
+
 const MAX_COORD: f32 = 100_000.0;
 const MAX_WIDTH: f32 = 20_000.0;
 const MAX_POINTS: usize = 1_000_000;
@@ -484,5 +515,24 @@ mod tests {
         .unwrap();
         let rows: Vec<u32> = changed(&img, &before).iter().map(|p| p.1).collect();
         assert!(rows.iter().any(|&y| y > 30), "the second line is below the first");
+    }
+
+    #[test]
+    fn scaling_multiplies_coordinates_widths_and_font_sizes_and_keeps_colours() {
+        let a = Annotation::Arrow { from: (10.0, 20.0), to: (30.0, 40.0), color: [1, 2, 3, 4], width: 6.0 };
+        assert_eq!(
+            a.scaled(0.5),
+            Annotation::Arrow { from: (5.0, 10.0), to: (15.0, 20.0), color: [1, 2, 3, 4], width: 3.0 }
+        );
+        let t = Annotation::Text { pos: (8.0, 8.0), text: "hi".into(), size: 20.0, color: [9, 9, 9, 255] };
+        assert_eq!(
+            t.scaled(2.0),
+            Annotation::Text { pos: (16.0, 16.0), text: "hi".into(), size: 40.0, color: [9, 9, 9, 255] }
+        );
+        let s = Annotation::Stroke { points: vec![(1.0, 2.0), (3.0, 4.0)], color: [0, 0, 0, 255], width: 2.0 };
+        assert_eq!(
+            s.scaled(3.0),
+            Annotation::Stroke { points: vec![(3.0, 6.0), (9.0, 12.0)], color: [0, 0, 0, 255], width: 6.0 }
+        );
     }
 }

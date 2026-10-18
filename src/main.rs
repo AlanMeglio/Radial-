@@ -420,7 +420,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if render::cli(&args) || settings::cli(&args) {
+    if render::cli(&args) || settings::cli(&args) || dialogs::cli(&args) {
         return;
     }
     if let [_, flag, state] = args.as_slice() {

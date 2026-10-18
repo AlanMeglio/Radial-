@@ -40,22 +40,22 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 // Palette
 // ---------------------------------------------------------------------------------------------------------------
 
-struct Pal {
-    bg: Rgba,
-    card: Rgba,
-    card_hi: Rgba,
-    border: Rgba,
-    text: Rgba,
-    dim: Rgba,
-    accent: Rgba,
-    on_accent: Rgba,
+pub(crate) struct Pal {
+    pub bg: Rgba,
+    pub card: Rgba,
+    pub card_hi: Rgba,
+    pub border: Rgba,
+    pub text: Rgba,
+    pub dim: Rgba,
+    pub accent: Rgba,
+    pub on_accent: Rgba,
 }
 
-fn luma(c: Rgba) -> f32 {
+pub(crate) fn luma(c: Rgba) -> f32 {
     (0.299 * c.0 as f32 + 0.587 * c.1 as f32 + 0.114 * c.2 as f32) / 255.0
 }
 
-fn palette(dark: bool, accent: Rgba) -> Pal {
+pub(crate) fn palette(dark: bool, accent: Rgba) -> Pal {
     // The configurator wears the chosen accent, unless it would vanish against the background.
     let fallback = Rgba::rgb(0x5b, 0x8c, 0xff);
     let ok = if dark { luma(accent) > 0.28 } else { luma(accent) < 0.72 };
@@ -191,7 +191,7 @@ fn wide(s: &str) -> Vec<u16> {
 // Drawing primitives
 // ---------------------------------------------------------------------------------------------------------------
 
-fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
+pub(crate) fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     let k = r * 0.5523;
     let mut pb = PathBuilder::new();
@@ -936,7 +936,7 @@ extern "system" {
     ) -> i32;
 }
 
-fn system_is_dark() -> bool {
+pub(crate) fn system_is_dark() -> bool {
     let (sub, name) =
         (wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"), wide("AppsUseLightTheme"));
     let mut v: u32 = 1;
