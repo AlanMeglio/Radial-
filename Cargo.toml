@@ -4,11 +4,20 @@ version = "0.1.0"
 edition = "2021"
 description = "Drag a file, hold Shift, drop on a radial menu to convert it."
 license = "MIT"
-rust-version = "1.75"
+rust-version = "1.85"
+
+[features]
+# Pure-Rust AVIF encoder (rav1e): adds about 2.3 MB. Without it AVIF output needs an AV1 encoder in Windows,
+# which Windows does not ship, so the AVIF sector stays disabled with an explanation.
+avif-encode = ["image/avif"]
 
 [dependencies]
 ab_glyph = "0.2"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+
+# Deflate for PDF streams and DOCX (zip) with the pure-Rust backend only.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+crc32fast = { version = "1", default-features = false, features = ["std"] }
 
 [dependencies.image]
 version = "0.25"
@@ -29,6 +38,23 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+]
+
+# PDF rendering and HEIC/AVIF go through the OS (Windows.Data.Pdf, WIC): no codec DLL is shipped.
+[dependencies.windows]
+version = "0.62"
+default-features = false
+features = [
+    "Data_Pdf",
+    "Foundation",
+    "Foundation_Collections",
+    "UI",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
 ]
 
 [profile.release]
