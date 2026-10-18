@@ -23,8 +23,21 @@ fn os_err(what: &str, e: windows::core::Error) -> Error {
     Error::Corrupt(format!("{what}: {}", e.message()))
 }
 
+/// Keeps the process-wide multithreaded apartment alive. Without it the apartment is torn down whenever the last
+/// worker thread that joined it exits, and a concurrent job fails with "the object server is stopping".
+fn keep_mta_alive() {
+    static KEEP: OnceLock<()> = OnceLock::new();
+    KEEP.get_or_init(|| {
+        // SAFETY: no arguments but the out cookie, which is never needed because the usage count is never released.
+        unsafe {
+            let _ = windows::Win32::System::Com::CoIncrementMTAUsage();
+        }
+    });
+}
+
 /// Runs `f` on a fresh thread inside a multithreaded WinRT apartment.
 fn on_mta<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    keep_mta_alive();
     std::thread::Builder::new()
         .name("radial-os-codec".into())
         .spawn(move || {
