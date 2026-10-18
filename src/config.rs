@@ -400,6 +400,22 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("key-any", "any drag", "cualquier arrastre"),
     ("folder-pick", "Choose the output folder", "Elige la carpeta de salida"),
     ("custom", "Custom", "Propio"),
+    ("menu-img", "Image menu", "Menú de imágenes"),
+    ("menu-doc", "Document menu", "Menú de documentos"),
+    ("menu-act", "Actions menu", "Menú de acciones"),
+    ("step-of", "Step {} of 3", "Paso {} de 3"),
+    ("hold", "Hold", "Mantén"),
+    ("no-key-hint", "No key: every file drag opens the menu.", "Sin tecla: cada arrastre de archivo abre el menú."),
+    (
+        "tray-hint",
+        "You can reopen Settings from the tray icon.",
+        "Puedes volver a abrir la configuración desde el icono de la bandeja.",
+    ),
+    ("how1", "Drag a file in Explorer", "Arrastra un archivo en el Explorador"),
+    ("how2", "Hold {}", "Mantén {}"),
+    ("how3", "Drop it on a sector", "Suéltalo sobre un sector"),
+    ("ms", "ms", "ms"),
+    ("off", "Off", "Apagado"),
 ];
 
 /// Looks a UI string up; unknown keys give an empty string (caught by the unit tests, not at runtime).

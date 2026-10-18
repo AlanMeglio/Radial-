@@ -145,15 +145,15 @@ impl Look {
 // Small helpers
 // ---------------------------------------------------------------------------------------------------------------
 
-fn clamp01(v: f32) -> f32 {
+pub fn clamp01(v: f32) -> f32 {
     v.clamp(0.0, 1.0)
 }
 
-fn col(c: Rgba, k: f32) -> Color {
+pub fn col(c: Rgba, k: f32) -> Color {
     Color::from_rgba8(c.0, c.1, c.2, (clamp01(c.3 as f32 / 255.0 * k) * 255.0).round() as u8)
 }
 
-fn solid(c: Rgba, k: f32) -> Paint<'static> {
+pub fn solid(c: Rgba, k: f32) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color(col(c, k));
     p.anti_alias = true;
@@ -164,7 +164,7 @@ fn stops(list: &[(f32, Rgba, f32)]) -> Vec<GradientStop> {
     list.iter().map(|&(t, c, k)| GradientStop::new(t, col(c, k))).collect()
 }
 
-fn linear(a: (f32, f32), b: (f32, f32), list: &[(f32, Rgba, f32)]) -> Paint<'static> {
+pub fn linear(a: (f32, f32), b: (f32, f32), list: &[(f32, Rgba, f32)]) -> Paint<'static> {
     let mut p = Paint::default();
     p.anti_alias = true;
     if let Some(sh) = LinearGradient::new(
@@ -179,7 +179,7 @@ fn linear(a: (f32, f32), b: (f32, f32), list: &[(f32, Rgba, f32)]) -> Paint<'sta
     p
 }
 
-fn radial(c: (f32, f32), focus: (f32, f32), r: f32, list: &[(f32, Rgba, f32)]) -> Paint<'static> {
+pub fn radial(c: (f32, f32), focus: (f32, f32), r: f32, list: &[(f32, Rgba, f32)]) -> Paint<'static> {
     let mut p = Paint::default();
     p.anti_alias = true;
     if let Some(sh) = RadialGradient::new(
@@ -199,11 +199,11 @@ fn radial(c: (f32, f32), focus: (f32, f32), r: f32, list: &[(f32, Rgba, f32)]) -
 const HAIR: Stroke =
     Stroke { width: 1.0, miter_limit: 4.0, line_cap: LineCap::Butt, line_join: LineJoin::Miter, dash: None };
 
-fn stroke(width: f32) -> Stroke {
+pub fn stroke(width: f32) -> Stroke {
     Stroke { width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() }
 }
 
-fn ease_out_cubic(t: f32) -> f32 {
+pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - clamp01(t)).powi(3)
 }
 
@@ -441,6 +441,13 @@ impl Face {
         let s = self.font.as_scaled(PxScale::from(px));
         let ia = s.glyph_id(a);
         s.h_advance(ia) + b.map_or(0.0, |b| s.kern(ia, s.glyph_id(b)))
+    }
+
+    /// Draws `text` starting at `x` (left aligned).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_left(&mut self, pm: &mut Pixmap, text: &str, x: f32, cy: f32, px: f32, c: Rgba, k: f32, tracking: f32) {
+        let w = self.measure(text, px, tracking);
+        self.draw(pm, text, x + w / 2.0, cy, px, c, k, tracking);
     }
 
     /// Width of `text` in pixels with `tracking` extra pixels between letters.

@@ -21,11 +21,14 @@ public class N {
 $sb=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 function MoveTo($x,$y){ [N]::mouse_event(0x8001,[int]($x*65535/($sb.Width-1)),[int]($y*65535/($sb.Height-1)),0,[UIntPtr]::Zero) }
 $scale = [N]::GetDpiForSystem() / 96.0
-Get-Process radial -ErrorAction SilentlyContinue | Stop-Process -Force
+$exe = if ($env:RADIAL_EXE) { $env:RADIAL_EXE } else { Join-Path $PSScriptRoot "..\target\release\radial.exe" }
+# Only touch the copy under test; a private mutex and settings folder keep it away from a running instance.
+Get-Process radial -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Resolve-Path $exe).Path } | Stop-Process -Force
+$env:RADIAL_INSTANCE = "e2e"; $env:RADIAL_NO_ONBOARDING = "1"; $env:APPDATA = Join-Path $env:TEMP "radial-e2e-appdata"
 $env:RADIAL_ANY_SURFACE = "1"
 $dir = Join-Path $env:TEMP "radial-e2e"; Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; New-Item $dir -ItemType Directory | Out-Null
 $bmp = New-Object System.Drawing.Bitmap 64,64; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.Clear([System.Drawing.Color]::OrangeRed); $bmp.Save("$dir\x.png"); $g.Dispose(); $bmp.Dispose()
-$proc = Start-Process (Join-Path $PSScriptRoot "..\target\release\radial.exe") -PassThru
+$proc = Start-Process $exe -PassThru
 Start-Sleep 1.5
 $form = New-Object System.Windows.Forms.Form
 $form.StartPosition = "Manual"; $form.Location = New-Object System.Drawing.Point(100,100); $form.Size = New-Object System.Drawing.Size(400,400); $form.TopMost = $true
@@ -46,6 +49,8 @@ $t.Add_Tick({
          $script:cx = ($r.L+$r.R)/2; $script:cy = ($r.T+$r.B)/2
          MoveTo ([int]($script:cx + 115*$scale)) ( [int]$script:cy) }
     18 { MoveTo ([int]($script:cx + 118*$scale)) ( [int]$script:cy+1) }
+    20 { $b = New-Object System.Drawing.Bitmap 540,540; $gg = [System.Drawing.Graphics]::FromImage($b)
+         $gg.CopyFromScreen([int]($script:cx-270),[int]($script:cy-270),0,0,$b.Size); $gg.Dispose(); $b.Save("$dir\overlay.png"); $b.Dispose() }
     22 { [N]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero) }
     26 { [N]::keybd_event(0x10,0,2,[UIntPtr]::Zero) }
     30 { $t.Stop(); $form.Close() }

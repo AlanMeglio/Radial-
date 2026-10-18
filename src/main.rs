@@ -1,4 +1,6 @@
 #![windows_subsystem = "windows"]
+// tiny-skia paints are configured field by field throughout the renderer.
+#![allow(clippy::field_reassign_with_default)]
 //! Radial: drag a file in Explorer, hold Shift, drop it on a sector of the radial menu to convert it.
 //! Tray app. Idle cost is zero: only low-level hooks and the message loop run until a drag starts.
 
@@ -401,8 +403,16 @@ fn main() {
     if render::cli(&args) || settings::cli(&args) {
         return;
     }
+    if let [_, flag, state] = args.as_slice() {
+        if flag == "--autostart" {
+            set_autostart(state == "on");
+            return;
+        }
+    }
     unsafe {
-        CreateMutexW(null(), 0, wide("Local\\RadialMenu").as_ptr());
+        // `RADIAL_INSTANCE=x` lets a second copy run side by side (used by tests).
+        let name = format!("Local\\RadialMenu{}", std::env::var("RADIAL_INSTANCE").unwrap_or_default());
+        CreateMutexW(null(), 0, wide(&name).as_ptr());
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return;
         }
