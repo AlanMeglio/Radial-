@@ -248,6 +248,28 @@ mod tests {
     }
 
     #[test]
+    fn metadata_on_a_png_with_a_text_chunk_writes_a_clean_copy_and_keeps_the_original() {
+        let d = temp("metaclean");
+        let src = d.join("tagged.png");
+        let mut raw = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut raw, 4, 4);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.add_text_chunk("Author".into(), "someone".into()).unwrap();
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&[200u8; 4 * 4 * 4]).unwrap();
+        }
+        std::fs::write(&src, &raw).unwrap();
+        let msg = metadata_one(&src, &Config::default(), Lang::En).unwrap();
+        assert!(msg.contains("tagged (clean).png"), "{msg}");
+        let clean = std::fs::read(d.join("tagged (clean).png")).unwrap();
+        assert!(!clean.windows(6).any(|w| w == b"Author"), "the text chunk is gone");
+        assert_eq!(std::fs::read(&src).unwrap(), raw, "the original is untouched");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn metadata_on_a_clean_png_writes_nothing() {
         let d = temp("meta");
         let src = d.join("c.png");

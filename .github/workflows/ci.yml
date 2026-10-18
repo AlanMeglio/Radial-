@@ -18,6 +18,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
+      - name: The optional AVIF encoder still compiles
+        run: cargo check --features avif-encode
       - uses: actions/upload-artifact@v4
         with:
           name: radial-windows-x64

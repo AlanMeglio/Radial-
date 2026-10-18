@@ -8,8 +8,60 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-- Pure logic (hit-testing, drag detection, format table, output naming) is unit tested; add a failing test first.
-- Win32 and rendering code cannot be unit tested. `cargo run --release -- --preview out.png` renders a static frame
-  of the menu, and `tests/e2e.ps1` drives a real drag and drop (it takes over the mouse for about three seconds).
-- Keep the idle cost at zero: no polling loops or timers that run while no menu is open.
+- Pure logic is unit tested and new logic starts with a failing test: hit-testing, drag detection, ring building
+  (`src/ring.rs`, `src/menus.rs`), the crop rectangle maths (`src/dialogs/geom.rs`), the edit and annotation state
+  machines, settings round trips, the engine (`src/engine`). The MSRV is Rust 1.75; clippy checks it.
+- Win32 and rendering code cannot be unit tested. Look at it instead:
+  - `radial --preview out.png --menu 8|4|7 [--hover N] [--theme T] [--dpi 2]` renders a ring over a sample wallpaper.
+  - `radial --settings out.png [--tab 1] [--step 0] [--lang es] [--light]` renders the configurator.
+  - `radial --dialog crop|bg|edit|annotate|redact --out out.png [--script "..."]` renders a dialog, optionally after
+    driving it (`click:ID`, `drag:x1,y1,x2,y2`, `text:abc`, `key:13`, `focus:ID`; the ids are the `ID_*` constants at
+    the top of each dialog file). `radial --sheet out.png` renders every theme.
+  - `radial --bench` times a frame, `radial --formats` shows what the machine can read and write.
+  - Regenerate the pictures in `docs/` with those flags when the look changes (the README lists them).
+- Two scripts drive the real thing against a release build. They use the mouse and keyboard, so do not touch either
+  while they run:
+  - `powershell -File tests\e2e.ps1` drags files out of a test form and checks the results: PNG to WEBP, PDF to TXT,
+    an image to COMPRESS through both ring switches (Tab and the hub), and an image to CROP (the dialog must open in
+    front, Enter must apply it and the window must close). `-Scenarios 3,5` runs some of them.
+  - `powershell -File tests\ui-smoke.ps1` opens the settings window and every action dialog on a 6 megapixel picture,
+    checks they draw and close with Esc, and reports memory before, during and after plus idle CPU.
+- Keep the idle cost at zero: no polling loops or timers that run while no menu or dialog is open. A dialog may
+  animate only while a worker thread is busy.
+- Nothing in the engine may overwrite a file or panic on a damaged input; use `engine::io::commit_unique`.
+- Strings the user sees go in `STRINGS` in `src/config.rs` with both an English and a Spanish text (a test checks
+  that every key has both).
 - Conventional Commit messages (`feat:`, `fix:`, `docs:`...).
+
+## Adding a theme
+
+A theme is a text file, see [Themes](README.md#themes) for every key.
+
+1. Copy `assets/themes/glass.theme` to `assets/themes/my-theme.theme` and change the colours (`name` is lowercase
+   letters, digits and `-`).
+2. List it in `BUILTIN` in `src/theme.rs` so it is embedded in the binary.
+3. Check it with `radial --preview out.png --theme my-theme`, then run `radial --sheet docs/themes.png` and commit the
+   new sheet. `cargo test` checks that every built-in theme parses and renders.
+
+Users can also drop a `.theme` file into `%APPDATA%\radial\themes` without rebuilding.
+
+## Adding an action or a sector
+
+Rings are data, not drawing code: add the operation to `src/ring.rs` (`ActionKind`, `build`), its label and hint
+strings to `STRINGS`, an icon in `src/render.rs`, and the work to `src/jobs.rs` (runs on drop) or a dialog in
+`src/dialogs` (implement `Dialog`, register it in `dialogs::open`). The engine function belongs in `src/engine`.
+
+## Windows resources
+
+The manifest (per-monitor DPI awareness, long paths), the icon and the version information live in `assets/` and are
+linked from the committed `assets/radial.res` by `build.rs`, so a normal build needs nothing but Rust. After changing
+the version, the manifest or the icon, run `tools\make-icon.ps1` (rebuilds `assets/radial.ico` from the app's own
+icon renderer) and `tools\build-resources.ps1` (needs `rc.exe` from the Windows SDK) and commit the results.
+
+## Releasing
+
+Update the version in `Cargo.toml` and `assets/radial.rc`, add a section to `CHANGELOG.md`, rebuild the resources,
+then tag `vX.Y.Z` and push the tag. (If you build a release by hand, set
+`RUSTFLAGS="--remap-path-prefix=%USERPROFILE%=~"` first: panic locations of dependencies otherwise embed your home
+directory in the executable. The workflow does this.) `.github/workflows/release.yml` builds the executable, zips it with the licence and
+README, and attaches both to the GitHub release.

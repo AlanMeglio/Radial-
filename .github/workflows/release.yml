@@ -1,0 +1,74 @@
+name: release
+
+# Push a tag such as v0.1.0 (it must match the version in Cargo.toml) to build the Windows executable and publish a
+# GitHub release with radial.exe, a zip containing the licence and README, and checksums.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The tag must match Cargo.toml
+        shell: pwsh
+        run: |
+          $line = Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1
+          $version = $line.Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "tag $env:GITHUB_REF_NAME does not match the Cargo.toml version $version"
+          }
+
+      - name: Keep build machine paths out of the executable
+        shell: pwsh
+        run: |
+          # Panic locations of dependencies would otherwise carry the runner's home directory.
+          "RUSTFLAGS=--remap-path-prefix=$env:USERPROFILE=~ --remap-path-prefix=$env:GITHUB_WORKSPACE=." | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "radial-$env:GITHUB_REF_NAME-windows-x64"
+          New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
+          Copy-Item target/release/radial.exe, LICENSE, README.md, CHANGELOG.md -Destination "dist/$name"
+          Copy-Item docs -Destination "dist/$name/docs" -Recurse
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          Copy-Item target/release/radial.exe -Destination dist/radial.exe
+          $sums = foreach ($f in "dist/$name.zip", "dist/radial.exe") {
+            "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(), (Split-Path $f -Leaf)
+          }
+          $sums | Out-File dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Release notes from the changelog
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          $text = Get-Content CHANGELOG.md -Raw
+          $m = [regex]::Match($text, "(?ms)^## \[$([regex]::Escape($version))\][^\r\n]*\r?\n(.*?)(?=^## \[|^\[[^\]]+\]: |\z)")
+          $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { "Release $env:GITHUB_REF_NAME" }
+          Set-Content -Path dist/notes.md -Value $notes -Encoding utf8
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $name = "radial-$env:GITHUB_REF_NAME-windows-x64"
+          gh release create $env:GITHUB_REF_NAME "dist/$name.zip" dist/radial.exe dist/SHA256SUMS.txt `
+            --title "Radial $env:GITHUB_REF_NAME" --notes-file dist/notes.md

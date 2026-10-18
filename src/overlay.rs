@@ -174,6 +174,8 @@ unsafe fn capture_backdrop(
 
 pub unsafe fn show(x: i32, y: i32) {
     hide_now();
+    // The first menu probes the Windows codecs while the pointer travels onto it.
+    engine::warm_up();
     let look = crate::current_look();
     let cfg = crate::current_config();
     let speed = cfg.speed;

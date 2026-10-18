@@ -43,11 +43,16 @@ pub use os::Availability;
 pub use pipeline::{convert_bytes, convert_file, source_availability, target_availability, Artifact, ConvertOptions};
 
 /// Probes the Windows codecs (HEIC/AVIF) on a background thread so the first menu does not wait for them.
+/// Runs once per process; the app calls it when the first menu starts to appear, so an idle tray process never
+/// loads the Windows imaging stack.
 pub fn warm_up() {
-    let _ = std::thread::Builder::new().name("radial-warm-up".into()).spawn(|| {
-        use crate::convert::Fmt;
-        let _ = os::can_decode(Fmt::Heic);
-        let _ = os::can_encode(Fmt::Heic);
-        let _ = os::can_encode(Fmt::Avif);
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = std::thread::Builder::new().name("radial-warm-up".into()).spawn(|| {
+            use crate::convert::Fmt;
+            let _ = os::can_decode(Fmt::Heic);
+            let _ = os::can_encode(Fmt::Heic);
+            let _ = os::can_encode(Fmt::Avif);
+        });
     });
 }

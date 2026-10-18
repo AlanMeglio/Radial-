@@ -4,6 +4,7 @@
 //! Radial: drag a file in Explorer, hold Shift, drop it on a sector of the radial menu to convert it.
 //! Tray app. Idle cost is zero: only low-level hooks and the message loop run until a drag starts.
 
+mod cli;
 mod config;
 mod convert;
 mod dialogs;
@@ -436,7 +437,11 @@ unsafe fn open_standalone(action: ring::ActionKind, file: std::path::PathBuf) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if render::cli(&args) || settings::cli(&args) || dialogs::cli(&args) {
+    if args.len() > 1 {
+        // Command line modes print (`--help`, `--formats`, `--bench`, usage errors): make that visible in a terminal.
+        cli::attach_console();
+    }
+    if cli::run(&args) || render::cli(&args) || settings::cli(&args) || dialogs::cli(&args) {
         return;
     }
     if let [_, flag, state] = args.as_slice() {
@@ -464,7 +469,6 @@ fn main() {
         ANY_SURFACE.store(std::env::var_os("RADIAL_ANY_SURFACE").is_some(), Relaxed);
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         OleInitialize(null());
-        engine::warm_up();
 
         let mut cfg = config::load();
         let first_run = !cfg.onboarded;

@@ -1329,6 +1329,21 @@ pub fn cli(args: &[String]) -> bool {
         }
         return true;
     }
+    if let Some(out) = get("--tray-icon") {
+        let size: u32 = get("--size").and_then(|v| v.parse().ok()).unwrap_or(256).clamp(16, 1024);
+        if let Some(pm) = icon_pixmap(size, cfg.resolve(&theme::find(&cfg.theme, &user)).accent) {
+            // The icon has transparency: write straight (not premultiplied) pixels.
+            let mut raw = Vec::with_capacity(pm.data().len());
+            for px in pm.pixels() {
+                let c = px.demultiply();
+                raw.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+            }
+            if let Some(img) = image::RgbaImage::from_raw(size, size, raw) {
+                img.save(out).expect("save icon png");
+            }
+        }
+        return true;
+    }
     if args.iter().any(|a| a == "--bench") {
         bench(&cfg, &user, dpi, face(&cfg));
         return true;
