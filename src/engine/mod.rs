@@ -50,7 +50,7 @@ pub use pipeline::{
     target_availability, Artifact, ConvertOptions,
 };
 
-/// Probes the Windows codecs (HEIC/AVIF) on a background thread so the first menu does not wait for them.
+/// Probes the Windows codecs (HEIC/AVIF) and the OCR language on a background thread so the first menu does not wait for them.
 /// Runs once per process; the app calls it when the first menu starts to appear, so an idle tray process never
 /// loads the Windows imaging stack.
 pub fn warm_up() {
@@ -61,6 +61,7 @@ pub fn warm_up() {
             let _ = os::can_decode(Fmt::Heic);
             let _ = os::can_encode(Fmt::Heic);
             let _ = os::can_encode(Fmt::Avif);
+            let _ = os::can_ocr();
         });
     });
 }
