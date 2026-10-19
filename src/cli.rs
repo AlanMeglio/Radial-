@@ -54,7 +54,7 @@ Usage:
   radial.exe --version | --help
 
 Development and documentation (render to a PNG, no window):
-  --preview out.png [--theme T] [--hover N] [--menu 8|4|7] [--accent #rrggbb] [--dpi F]
+  --preview out.png [--theme T] [--hover N] [--menu 8|4|7|6] [--accent #rrggbb] [--dpi F]
   --sheet out.png                     every theme on one contact sheet
   --settings out.png [--tab N] [--step N] [--lang es] [--light] [--theme T] [--menu 8|4|7]
   --dialog crop|bg|edit|annotate --out out.png [--image F] [--script S] [--lang es] [--light]

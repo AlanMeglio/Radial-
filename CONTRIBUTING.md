@@ -12,18 +12,20 @@ cargo test
   (`src/ring.rs`, `src/menus.rs`), the crop rectangle maths (`src/dialogs/geom.rs`), the edit and annotation state
   machines, settings round trips, the engine (`src/engine`). The MSRV is Rust 1.75; clippy checks it.
 - Win32 and rendering code cannot be unit tested. Look at it instead:
-  - `radial --preview out.png --menu 8|4|7 [--hover N] [--theme T] [--dpi 2]` renders a ring over a sample wallpaper.
+  - `radial --preview out.png --menu 8|4|7|6 [--hover N] [--theme T] [--dpi 2]` renders a ring over a sample wallpaper.
   - `radial --settings out.png [--tab 1] [--step 0] [--lang es] [--light]` renders the configurator.
-  - `radial --dialog crop|bg|edit|annotate|redact --out out.png [--script "..."]` renders a dialog, optionally after
+  - `radial --dialog crop|bg|edit|annotate|resize|rename|sector --out out.png [--script "..."]` renders a dialog, optionally after
     driving it (`click:ID`, `drag:x1,y1,x2,y2`, `text:abc`, `key:13`, `focus:ID`; the ids are the `ID_*` constants at
     the top of each dialog file). `radial --sheet out.png` renders every theme.
   - `radial --bench` times a frame, `radial --formats` shows what the machine can read and write.
   - Regenerate the pictures in `docs/` with those flags when the look changes (the README lists them).
 - Two scripts drive the real thing against a release build. They use the mouse and keyboard, so do not touch either
   while they run:
-  - `powershell -File tests\e2e.ps1` drags files out of a test form and checks the results: PNG to WEBP, PDF to TXT,
-    an image to COMPRESS through both ring switches (Tab and the hub), and an image to CROP (the dialog must open in
-    front, Enter must apply it and the window must close). `-Scenarios 3,5` runs some of them.
+  - `powershell -File tests\e2e.ps1` drags files out of a test form and checks the results over a matrix of every
+    kind of file (picture, PDF, Word, text, CSV, workbook, ZIP, folder, an unknown `.ogg`), every ring they have and
+    the sectors that matter, reached by the wheel, Tab and the hub, plus several files at once and the CROP dialog
+    (it must open in front, Enter must apply it and the window must close). `-Only "XLSX"` runs the cases whose
+    name has that text; `-Repeat 10` repeats each one (to hunt for something intermittent).
   - `powershell -File tests\ui-smoke.ps1` opens the settings window and every action dialog on a 6 megapixel picture,
     checks they draw and close with Esc, and reports memory before, during and after plus idle CPU.
 - Keep the idle cost at zero: no polling loops or timers that run while no menu or dialog is open. A dialog may
@@ -47,9 +49,12 @@ Users can also drop a `.theme` file into `%APPDATA%\radial\themes` without rebui
 
 ## Adding an action or a sector
 
-Rings are data, not drawing code: add the operation to `src/ring.rs` (`ActionKind`, `build`), its label and hint
-strings to `STRINGS`, an icon in `src/render.rs`, and the work to `src/jobs.rs` (runs on drop) or a dialog in
-`src/dialogs` (implement `Dialog`, register it in `dialogs::open`). The engine function belongs in `src/engine`.
+Rings are data, not drawing code: add the operation to `src/ring.rs` (`ActionKind`, then the list it belongs to:
+`PICTURE_TOOLS`, `PDF_TOOLS` or `FILE_TOOLS`, and `EVERY`), its label and hint strings to `STRINGS`, an icon in
+`src/render.rs`, and the work to `src/universal.rs` (runs on drop, any file) or `src/jobs.rs`, or a dialog in
+`src/dialogs` (implement `Dialog`, register it in `dialogs::open`). The engine function belongs in `src/engine`. A
+conversion between two kinds of file also needs its row in `engine::supports` and its arm in
+`pipeline::convert_bytes`; a test keeps the two in step.
 
 ## Windows resources
 

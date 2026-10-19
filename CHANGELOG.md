@@ -5,14 +5,39 @@ the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Four rings, and the rings a file has.** Documents and Images convert it, Tools hold what only that kind of file
+  has, Files hold what works on any file (same order every time), and "yours" holds your own sectors. A ring with
+  nothing for the dragged files is skipped. The mouse wheel walks through them while you drag (down is next); Tab and
+  resting on the hub still work. Any file opens a menu now, including folders, ZIPs and files Radial cannot convert.
+- **Excel and CSV.** A workbook becomes CSV (one per sheet; dates stay dates), TXT, PDF or pictures; a CSV becomes a
+  workbook, PDF or pictures. XLSX is read and written without any dependency.
+- **Documents reach pictures** (Word, text, CSV and workbooks through a PDF) and **pictures reach text** (Windows OCR).
+- **COPY TEXT** puts the text of a picture or PDF on the clipboard. **RESIZE** shrinks pictures with presets (email,
+  web, phone, small, half, quarter, or your own size) in one click, for any number of files.
+- **MERGE** turns several PDFs, pictures, Word, text, CSV or workbook files into one PDF in natural order; **SPLIT**
+  writes one PDF per page. Both copy the real content byte for byte (text stays text, fonts and vectors stay).
+- **RENAME** with a live preview (find and replace, case, spaces, accents, prefix and suffix, numbering, dates,
+  extension case), safe swaps and chains, never overwriting.
+- **ZIP** (streaming, constant memory), **UNZIP** (refuses unsafe paths and zip bombs), **INFO**, **SHA-256** (verifies
+  against a hash on the clipboard), **COPY PATH**, **REVEAL** and **SORT** (a folder into subfolders by type or month)
+  work on any file. The tray menu has **Undo last rename or sort**.
+- **Your own sectors** (Settings > My sectors): move or copy to a folder, or open with a program, optionally for some
+  extensions only. They get their own ring.
+- A new default look, **Windows 11**: flat acrylic sectors, the system accent colour, light or dark with the system.
+  The dialogs and Settings use the same neutrals, 4 px controls and sentence-case captions.
+
 ### Changed
 
-- New default look, "Windows 11": flat acrylic sectors, thin edge, no glow, sentence-case labels, and it follows the system light/dark mode and accent colour. The dialogs and Settings were restyled the same way (Windows 11 neutrals, 4 px controls, accent-bar tabs, no uppercase captions). The older themes remain available.
-- Every file now gets all three rings (documents, images, actions) and the mouse wheel moves between them while you
-  drag; Tab and resting on the hub go to the next ring. Sectors that cannot work for the file are greyed out with the
-  reason instead of the ring being missing. The `start_ring` setting is now `auto`, `documents`, `images` or `actions`
-  (`convert` still reads as `auto`).
-- A file Radial does not read still opens the menu, with every sector greyed out, instead of nothing.
+- The actions ring is now the Tools ring (copy text and resize joined the picture tools) and the Files ring.
+  `start_ring` accepts `auto`, `documents`, `images`, `tools` and `files` (`convert` reads as `auto`, `actions` as
+  `tools`).
+- REDACT is gone: ANNOTATE's filled black box replaces pixels in the saved copy, which is the same thing.
+
+### Removed
+
+- Code nothing could reach (the engine had hidden it behind a blanket `allow(dead_code)`).
 
 ## [0.1.0] - 2026-10-18
 

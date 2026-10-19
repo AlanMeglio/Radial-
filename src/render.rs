@@ -1274,6 +1274,7 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
     };
     let (src, ring) = match kind {
         4 => (SourceKind::Pdf, RingKind::Documents),
+        6 => (SourceKind::Pdf, RingKind::Files),
         7 => (SourceKind::Image(Fmt::Png), RingKind::Tools),
         _ => (SourceKind::Image(Fmt::Png), RingKind::Images),
     };
