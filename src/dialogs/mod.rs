@@ -263,6 +263,7 @@ pub unsafe fn open(action: ActionKind, paths: Vec<PathBuf>) {
         ActionKind::Edit => Box::new(edit::EditDialog::new(path)),
         ActionKind::Annotate => Box::new(annotate::AnnotateDialog::new(path)),
         ActionKind::Redact => Box::new(redact::RedactDialog::new(path)),
+        ActionKind::Resize => Box::new(resize::ResizeDialog::new(paths)),
         _ => return,
     };
     open_dialog(dlg, lang, cursor_dpi());
@@ -707,6 +708,10 @@ pub fn cli(args: &[String]) -> bool {
         "edit" => Box::new(edit::EditDialog::new(src)),
         "annotate" => Box::new(annotate::AnnotateDialog::new(src)),
         "redact" => Box::new(redact::RedactDialog::new(src)),
+        "resize" => {
+            let n: usize = get("--count").and_then(|v| v.parse().ok()).unwrap_or(1);
+            Box::new(resize::ResizeDialog::new(vec![src; n.max(1)]))
+        }
         _ => return true,
     };
     let (lw, lh) = dlg.size();

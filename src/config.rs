@@ -598,6 +598,33 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
         "Arrastra sobre la imagen para marcar|lo que quitar. La copia guardada|tiene esos píxeles reemplazados, no|tapados. El original nunca cambia.",
     ),
     ("red-apply", "Redact and save", "Tachar y guardar"),
+    // resize
+    ("rsz-title", "Resize pictures", "Achicar imágenes"),
+    ("rsz-size", "Size", "Tamaño"),
+    ("rsz-email", "Email", "Correo"),
+    ("rsz-web", "Web", "Web"),
+    ("rsz-phone", "Phone", "Celular"),
+    ("rsz-small", "Small", "Chica"),
+    ("rsz-half", "Half", "Mitad"),
+    ("rsz-quarter", "Quarter", "Un cuarto"),
+    ("rsz-custom", "Custom", "Otro"),
+    ("rsz-longest", "Longest side", "Lado mayor"),
+    ("rsz-percent", "Percent", "Porcentaje"),
+    ("rsz-same", "Already this small", "Ya es así de chica"),
+    ("rsz-pictures", "{} pictures", "{} imágenes"),
+    ("rsz-estimating", "Estimating the size...", "Calculando el tamaño..."),
+    ("rsz-estimate", "About {}, was {}", "Unos {}, antes {}"),
+    ("rsz-already", "This picture is already that small", "Esta imagen ya es así de chica"),
+    (
+        "rsz-already-run",
+        "Already at or below that size. Pick a smaller one.",
+        "Ya tiene ese tamaño o menos. Elige uno más chico.",
+    ),
+    ("rsz-jpg", "Save as JPG (smaller)", "Guardar como JPG (más liviano)"),
+    ("rsz-go", "Resize", "Achicar"),
+    ("rsz-done-many", "Resized {} pictures: {} -> {} ({})", "Achicadas {} imágenes: {} -> {} ({})"),
+    ("rsz-skipped", "{} already small enough", "{} ya eran así de chicas"),
+    ("rsz-failed-some", "{} failed: {}", "{} fallaron: {}"),
 ];
 
 /// Looks a UI string up; unknown keys give an empty string (caught by the unit tests, not at runtime).
