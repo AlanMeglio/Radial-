@@ -70,6 +70,18 @@ pub enum ActionKind {
     CopyPath,
     /// Opens Explorer with the file selected.
     Reveal,
+    /// Reads the text of a picture or PDF onto the clipboard.
+    CopyText,
+    /// Shrinks pictures to a preset size.
+    Resize,
+    /// Renames files by a rule.
+    Rename,
+    /// One PDF per page.
+    Split,
+    /// Several files into one PDF.
+    Merge,
+    /// Files of a folder into subfolders by type or month.
+    Sort,
 }
 
 impl ActionKind {
@@ -84,6 +96,38 @@ impl ActionKind {
         ActionKind::Redact,
     ];
 
+    /// Every action, in a fixed order: a message can carry an action as its index here.
+    pub const EVERY: [ActionKind; 19] = [
+        ActionKind::Compress,
+        ActionKind::Metadata,
+        ActionKind::Edit,
+        ActionKind::Annotate,
+        ActionKind::AddBg,
+        ActionKind::Crop,
+        ActionKind::Redact,
+        ActionKind::Zip,
+        ActionKind::Unzip,
+        ActionKind::Info,
+        ActionKind::Checksum,
+        ActionKind::CopyPath,
+        ActionKind::Reveal,
+        ActionKind::CopyText,
+        ActionKind::Resize,
+        ActionKind::Rename,
+        ActionKind::Split,
+        ActionKind::Merge,
+        ActionKind::Sort,
+    ];
+
+    /// The index of this action in [`ActionKind::EVERY`].
+    pub fn id(self) -> usize {
+        Self::EVERY.iter().position(|a| *a == self).unwrap_or(0)
+    }
+
+    pub fn from_id(id: usize) -> Option<ActionKind> {
+        Self::EVERY.get(id).copied()
+    }
+
     /// What menu 3 offers for anything that is not purely pictures.
     pub const UNIVERSAL: [ActionKind; 5] =
         [ActionKind::Zip, ActionKind::Info, ActionKind::Checksum, ActionKind::CopyPath, ActionKind::Reveal];
@@ -92,7 +136,13 @@ impl ActionKind {
     pub fn is_dialog(self) -> bool {
         matches!(
             self,
-            ActionKind::Edit | ActionKind::Annotate | ActionKind::AddBg | ActionKind::Crop | ActionKind::Redact
+            ActionKind::Edit
+                | ActionKind::Annotate
+                | ActionKind::AddBg
+                | ActionKind::Crop
+                | ActionKind::Redact
+                | ActionKind::Resize
+                | ActionKind::Rename
         )
     }
 
@@ -117,6 +167,12 @@ impl ActionKind {
             "checksum" | "sha256" => ActionKind::Checksum,
             "copypath" | "path" => ActionKind::CopyPath,
             "reveal" => ActionKind::Reveal,
+            "copytext" | "ocr" => ActionKind::CopyText,
+            "resize" => ActionKind::Resize,
+            "rename" => ActionKind::Rename,
+            "split" => ActionKind::Split,
+            "merge" => ActionKind::Merge,
+            "sort" => ActionKind::Sort,
             _ => return None,
         })
     }
@@ -137,6 +193,12 @@ impl ActionKind {
             ActionKind::Checksum => "act-checksum",
             ActionKind::CopyPath => "act-copypath",
             ActionKind::Reveal => "act-reveal",
+            ActionKind::CopyText => "act-copytext",
+            ActionKind::Resize => "act-resize",
+            ActionKind::Rename => "act-rename",
+            ActionKind::Split => "act-split",
+            ActionKind::Merge => "act-merge",
+            ActionKind::Sort => "act-sort",
         }
     }
 
@@ -156,6 +218,12 @@ impl ActionKind {
             ActionKind::Checksum => "act-checksum-hint",
             ActionKind::CopyPath => "act-copypath-hint",
             ActionKind::Reveal => "act-reveal-hint",
+            ActionKind::CopyText => "act-copytext-hint",
+            ActionKind::Resize => "act-resize-hint",
+            ActionKind::Rename => "act-rename-hint",
+            ActionKind::Split => "act-split-hint",
+            ActionKind::Merge => "act-merge-hint",
+            ActionKind::Sort => "act-sort-hint",
         }
     }
 }
@@ -711,6 +779,25 @@ mod tests {
             ("reveal", ActionKind::Reveal),
         ] {
             assert_eq!(ActionKind::from_name(name), Some(a));
+        }
+    }
+
+    #[test]
+    fn every_action_has_a_stable_id_and_a_label() {
+        for (i, a) in ActionKind::EVERY.iter().enumerate() {
+            assert_eq!(a.id(), i);
+            assert_eq!(ActionKind::from_id(i), Some(*a));
+        }
+        assert_eq!(ActionKind::from_id(ActionKind::EVERY.len()), None);
+        let mut keys: Vec<_> = ActionKind::EVERY.iter().map(|a| a.label_key()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), ActionKind::EVERY.len(), "no two actions share a label");
+        for a in ActionKind::EVERY {
+            for l in [crate::config::Lang::En, crate::config::Lang::Es] {
+                assert!(!crate::config::tr(l, a.label_key()).is_empty(), "{a:?}");
+                assert!(!crate::config::tr(l, a.hint_key()).is_empty(), "{a:?}");
+            }
         }
     }
 

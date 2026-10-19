@@ -252,9 +252,11 @@ unsafe fn cursor_dpi() -> u32 {
     dx
 }
 
-/// Opens the dialog for `action` on `path`. Actions without a dialog are ignored.
-pub unsafe fn open(action: ActionKind, path: PathBuf) {
+/// Opens the dialog for `action` on `paths` (the picture tools use the first one; resize and rename take them all).
+/// Actions without a dialog are ignored.
+pub unsafe fn open(action: ActionKind, paths: Vec<PathBuf>) {
     let lang = crate::current_config().lang;
+    let Some(path) = paths.first().cloned() else { return };
     let dlg: Box<dyn Dialog> = match action {
         ActionKind::Crop => Box::new(crop::CropDialog::new(path)),
         ActionKind::AddBg => Box::new(bg::BgDialog::new(path)),

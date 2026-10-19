@@ -35,7 +35,7 @@ pub const WM_HIDE_SOON: u32 = WM_APP + 12;
 pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<(String, bool)> with the result text and a failure flag
 /// Posted by the hooks (Tab, mouse wheel) during a drag: moves to another ring. wparam 1 is next, 0 is previous.
 pub const WM_RING_STEP: u32 = WM_APP + 14;
-/// wparam: index into `ActionKind::ALL`; lparam: Box<PathBuf>. Opens an action dialog once the drop has returned.
+/// wparam: `ActionKind::id`; lparam: Box<Vec<PathBuf>>. Opens an action dialog once the drop has returned.
 pub const WM_OPEN_DIALOG: u32 = WM_APP + 15;
 /// Test knob: wparam is an index into `ActionKind::ALL`; opens that dialog on the file named by `RADIAL_OPEN_FILE`.
 pub const WM_OPEN_TEST: u32 = WM_APP + 16;
@@ -444,13 +444,13 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
         }
         WM_OPEN_TEST => {
             if let (Some(a), Some(f)) = (ActionKind::ALL.get(wp), std::env::var_os("RADIAL_OPEN_FILE")) {
-                crate::dialogs::open(*a, PathBuf::from(f));
+                crate::dialogs::open(*a, vec![PathBuf::from(f)]);
             }
         }
         WM_OPEN_DIALOG => {
-            let path = *Box::from_raw(lp as *mut PathBuf);
-            if let Some(a) = ActionKind::ALL.get(wp) {
-                crate::dialogs::open(*a, path);
+            let paths = *Box::from_raw(lp as *mut Vec<PathBuf>);
+            if let Some(a) = ActionKind::from_id(wp) {
+                crate::dialogs::open(a, paths);
             }
         }
         WM_TIMER if wp == TIMER_FRAME => tick(),
@@ -734,9 +734,8 @@ unsafe fn run(op: Op, files: Vec<PathBuf>) {
             std::thread::spawn(move || crate::universal::run(a, files, cfg));
         }
         Op::Action(a) => {
-            let Some(first) = files.into_iter().next() else { return };
-            let idx = ActionKind::ALL.iter().position(|x| *x == a).unwrap_or(0);
-            let boxed = Box::into_raw(Box::new(first));
+            let idx = a.id();
+            let boxed = Box::into_raw(Box::new(files));
             if PostMessageW(hwnd(), WM_OPEN_DIALOG, idx, boxed as LPARAM) == 0 {
                 drop(Box::from_raw(boxed));
             }

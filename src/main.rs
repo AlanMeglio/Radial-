@@ -438,7 +438,7 @@ unsafe fn open_standalone(action: ring::ActionKind, file: std::path::PathBuf) {
     let look = Look::new(&cfg, &user);
     APP.with(|a| *a.borrow_mut() = Some(App { cfg, user_themes: user, look }));
     dialogs::set_standalone();
-    dialogs::open(action, file);
+    dialogs::open(action, vec![file]);
     let mut msg: MSG = zeroed();
     while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
         TranslateMessage(&msg);
