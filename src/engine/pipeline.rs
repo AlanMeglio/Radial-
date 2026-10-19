@@ -7,8 +7,9 @@ use super::kind::{detect_head, SourceKind, Target, HEAD_LEN};
 use super::meta::exif_orientation;
 use super::os::{self, Availability};
 use super::pdfread;
-use super::pdfwrite::{images_to_pdf, text_to_pdf, PdfImage};
+use super::pdfwrite::{images_to_pdf, table_to_pdf, text_to_pdf, PdfImage};
 use super::raster::{self, EncodeOptions, MAX_PIXELS};
+use super::xlsx::{self, Sheet};
 use crate::convert::Fmt;
 use image::DynamicImage;
 use std::collections::HashMap;
@@ -63,6 +64,81 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
         SourceKind::Other => "this kind of file",
     };
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
+}
+
+/// Most rows of a table that become a PDF: a longer one makes a PDF nobody can use (CSV or XLSX keep every row).
+const MAX_TABLE_ROWS: usize = 20_000;
+
+fn table_pdf(title: &str, rows: &[Vec<String>]) -> Result<Vec<u8>> {
+    if rows.len() > MAX_TABLE_ROWS {
+        return Err(Error::Unsupported(format!(
+            "{} rows is too many for a PDF (the limit is {MAX_TABLE_ROWS}): convert it to CSV instead",
+            rows.len()
+        )));
+    }
+    Ok(table_to_pdf(title, rows))
+}
+
+/// What a worksheet's name adds to the output file name: nothing for a single sheet, `-Name` otherwise.
+fn sheet_suffix(sheets: &[Sheet], i: usize) -> String {
+    if sheets.len() < 2 {
+        return String::new();
+    }
+    let name: String = sheets[i]
+        .name
+        .chars()
+        .map(|c| if c.is_control() || ['<', '>', ':', '"', '/', '\\', '|', '?', '*'].contains(&c) { '_' } else { c })
+        .collect();
+    let name = name.trim().trim_matches('.');
+    let name: String = name.chars().take(40).collect();
+    if name.is_empty() {
+        format!("-{}", i + 1)
+    } else {
+        format!("-{name}")
+    }
+}
+
+/// Every conversion that starts from a workbook: one output per sheet, except TXT which holds them all.
+fn sheet_to(input: &[u8], to: Target, opts: &ConvertOptions) -> Result<Vec<Artifact>> {
+    let sheets = xlsx::read_xlsx(input)?;
+    if sheets.is_empty() {
+        return Err(Error::Corrupt("the workbook has no visible sheets".into()));
+    }
+    if to == Target::Txt {
+        let text = match sheets.as_slice() {
+            [one] => xlsx::rows_to_text(&one.rows),
+            many => many
+                .iter()
+                .map(|s| {
+                    format!(
+                        "## {}
+{}",
+                        s.name,
+                        xlsx::rows_to_text(&s.rows)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                ),
+        };
+        return one("txt", text.into_bytes());
+    }
+    let mut out = Vec::new();
+    for (i, sheet) in sheets.iter().enumerate() {
+        let suffix = sheet_suffix(&sheets, i);
+        match to {
+            Target::Csv => out.push(Artifact { suffix, ext: "csv", data: xlsx::csv_bytes(&sheet.rows) }),
+            Target::Pdf => out.push(Artifact { suffix, ext: "pdf", data: table_pdf(&sheet.name, &sheet.rows)? }),
+            Target::Image(dst) => {
+                let pages = pdf_to_images(&table_pdf(&sheet.name, &sheet.rows)?, dst, opts)?;
+                out.extend(pages.into_iter().map(|a| Artifact { suffix: format!("{suffix}{}", a.suffix), ..a }));
+            }
+            _ => return Err(unsupported(SourceKind::Sheet, to)),
+        }
+    }
+    Ok(out)
 }
 
 /// The PDF that the text of a Word or text file makes.
@@ -126,6 +202,14 @@ pub fn convert_bytes(input: &[u8], kind: SourceKind, to: Target, opts: &ConvertO
         // Documents reach pictures through the PDF their text makes.
         (SourceKind::Docx | SourceKind::Text, Target::Image(dst)) => pdf_to_images(&text_pdf(input, kind)?, dst, opts),
         (SourceKind::Text, Target::Docx) => one("docx", docx::text_to_docx(&decode_text(input)?)),
+        (SourceKind::Sheet, _) => sheet_to(input, to, opts),
+        (SourceKind::Csv, Target::Xlsx) => {
+            one("xlsx", xlsx::write_xlsx(&xlsx::parse_csv(&decode_text(input)?), "Sheet1"))
+        }
+        (SourceKind::Csv, Target::Pdf) => one("pdf", table_pdf("", &xlsx::parse_csv(&decode_text(input)?))?),
+        (SourceKind::Csv, Target::Image(dst)) => {
+            pdf_to_images(&table_pdf("", &xlsx::parse_csv(&decode_text(input)?))?, dst, opts)
+        }
         _ => Err(unsupported(kind, to)),
     }
 }
@@ -453,6 +537,14 @@ mod tests {
             (img_kind(Fmt::Png), png(&DynamicImage::ImageRgba8(rgba(32, 24)))),
             (SourceKind::Docx, docx::text_to_docx("menu test")),
             (SourceKind::Text, b"menu test".to_vec()),
+            (SourceKind::Sheet, xlsx::write_xlsx(&[vec!["a".into(), "b".into()], vec!["1".into(), "2".into()]], "S")),
+            (
+                SourceKind::Csv,
+                b"a,b
+1,2
+"
+                .to_vec(),
+            ),
             (SourceKind::Archive, vec![0, 1]),
             (SourceKind::Folder, vec![]),
             (SourceKind::Other, vec![0, 1]),
@@ -496,6 +588,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A workbook with inline strings, one worksheet per `(name, rows)`; a cell shaped `#n` is the number n.
+    fn workbook(sheets: &[(&str, &[&[&str]])]) -> Vec<u8> {
+        use super::super::zip::ZipWriter;
+        let ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let mut zip = ZipWriter::new();
+        let mut wb = format!("<workbook xmlns=\"{ns}\" xmlns:r=\"{rel}\"><sheets>");
+        let mut rels =
+            String::from("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+        for (i, (name, rows)) in sheets.iter().enumerate() {
+            let n = i + 1;
+            wb += &format!("<sheet name=\"{name}\" sheetId=\"{n}\" r:id=\"rId{n}\"/>");
+            rels +=
+                &format!("<Relationship Id=\"rId{n}\" Type=\"{rel}/worksheet\" Target=\"worksheets/sheet{n}.xml\"/>");
+            let mut xml = format!("<worksheet xmlns=\"{ns}\"><sheetData>");
+            for (r, row) in rows.iter().enumerate() {
+                xml += &format!("<row r=\"{}\">", r + 1);
+                for (c, cell) in row.iter().enumerate() {
+                    let at = format!("{}{}", (b'A' + c as u8) as char, r + 1);
+                    match cell.strip_prefix('#') {
+                        Some(num) => xml += &format!("<c r=\"{at}\"><v>{num}</v></c>"),
+                        None => xml += &format!("<c r=\"{at}\" t=\"inlineStr\"><is><t>{cell}</t></is></c>"),
+                    }
+                }
+                xml += "</row>";
+            }
+            xml += "</sheetData></worksheet>";
+            zip.add(&format!("xl/worksheets/sheet{n}.xml"), xml.as_bytes(), true);
+        }
+        zip.add("xl/workbook.xml", (wb + "</sheets></workbook>").as_bytes(), true);
+        zip.add("xl/_rels/workbook.xml.rels", (rels + "</Relationships>").as_bytes(), true);
+        zip.finish()
+    }
+
+    #[test]
+    fn a_workbook_becomes_one_csv_per_sheet_named_after_the_sheet() {
+        let one = workbook(&[("Budget", &[&["Item", "Cost"], &["Tea, green", "#1.5"]])]);
+        let out = run(&one, SourceKind::Sheet, Target::Csv).unwrap();
+        assert_eq!((out.len(), out[0].suffix.as_str(), out[0].ext), (1, "", "csv"));
+        let text = String::from_utf8(out[0].data.clone()).unwrap();
+        assert_eq!(text, "\u{FEFF}Item,Cost\r\n\"Tea, green\",1.5\r\n");
+        let two = workbook(&[("Q1 / Sales", &[&["a"]]), ("Q2", &[&["b"]])]);
+        let out = run(&two, SourceKind::Sheet, Target::Csv).unwrap();
+        let names: Vec<_> = out.iter().map(|a| a.suffix.as_str()).collect();
+        assert_eq!(names, ["-Q1 _ Sales", "-Q2"], "a slash cannot be in a file name");
+    }
+
+    #[test]
+    fn a_workbook_becomes_text_pdf_and_pictures() {
+        let two = workbook(&[("A", &[&["x", "y"]]), ("B", &[&["z"]])]);
+        let txt = run(&two, SourceKind::Sheet, Target::Txt).unwrap();
+        assert_eq!(String::from_utf8(txt[0].data.clone()).unwrap(), "## A\nx\ty\n\n## B\nz\n");
+        let pdf = run(&two, SourceKind::Sheet, Target::Pdf).unwrap();
+        assert_eq!(pdf.len(), 2);
+        assert!(pdf[0].data.starts_with(b"%PDF-"));
+        let text = pdfread::extract_pages(&pdf[0].data).unwrap().join(" ");
+        assert!(text.contains('x') && text.contains('y'), "{text}");
+        let pics = run(&two, SourceKind::Sheet, Target::Image(Fmt::Png)).unwrap();
+        assert_eq!(pics.iter().map(|a| a.suffix.as_str()).collect::<Vec<_>>(), ["-A", "-B"]);
+        assert!(raster::decode(&pics[0].data).is_ok());
+    }
+
+    #[test]
+    fn a_csv_becomes_a_workbook_that_reads_back_the_same() {
+        let csv = "Name;Qty\r\nTea;3\r\n\"Cof;fee\";4\r\n";
+        let out = run(csv.as_bytes(), SourceKind::Csv, Target::Xlsx).unwrap();
+        assert_eq!(out[0].ext, "xlsx");
+        let sheets = xlsx::read_xlsx(&out[0].data).unwrap();
+        assert_eq!(sheets[0].rows, vec![vec!["Name", "Qty"], vec!["Tea", "3"], vec!["Cof;fee", "4"]]);
+        let pdf = run(csv.as_bytes(), SourceKind::Csv, Target::Pdf).unwrap();
+        assert!(pdfread::extract_pages(&pdf[0].data).unwrap().join(" ").contains("Cof;fee"));
+    }
+
+    #[test]
+    fn a_table_too_long_for_a_pdf_says_so_and_points_to_csv() {
+        let rows: Vec<Vec<String>> = (0..MAX_TABLE_ROWS + 1).map(|i| vec![i.to_string()]).collect();
+        let big = xlsx::write_xlsx(&rows, "Big");
+        match run(&big, SourceKind::Sheet, Target::Pdf) {
+            Err(Error::Unsupported(m)) => assert!(m.contains("CSV"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(run(&big, SourceKind::Sheet, Target::Csv).is_ok(), "CSV keeps every row");
     }
 
     #[test]
