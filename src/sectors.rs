@@ -6,7 +6,6 @@
 //! `name (1).ext`), never follows junctions or symlinks and keeps an undo trail for moves only.
 // Only the file reading, the checks and the summaries are used by the editor and Settings so far. `run`,
 // `applies_to` and everything under them are reached from the ring, menu and overlay, which the parent wires.
-#![allow(dead_code)]
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -269,11 +268,13 @@ pub fn validate_in(s: &Sector, lang: Lang) -> Result<(), String> {
 }
 
 /// Checks `s`; the problem is worded in English (the editor uses [`validate_in`]).
+#[cfg(test)]
 pub fn validate(s: &Sector) -> Result<(), String> {
     validate_in(s, Lang::En)
 }
 
 /// "Move to  D:\Invoices  .pdf .docx": the one-line summary of a sector.
+#[cfg(test)]
 pub fn summary(s: &Sector, lang: Lang) -> String {
     let what = match s.kind {
         Kind::MoveTo => tr(lang, "sec-sum-move"),
