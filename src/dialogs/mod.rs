@@ -269,6 +269,19 @@ pub unsafe fn open(action: ActionKind, paths: Vec<PathBuf>) {
     open_dialog(dlg, lang, cursor_dpi());
 }
 
+/// Opens the editor of a user sector: a new one (`None`) or the sector at `index` of `sectors::load()`. Only one
+/// editor is open at a time; asking again brings it forward.
+pub unsafe fn open_sector_editor(index: Option<usize>) {
+    if index.is_none() && crate::sectors::load().len() >= crate::sectors::MAX_SECTORS {
+        return;
+    }
+    if !sector::claim() {
+        return;
+    }
+    let lang = crate::current_config().lang;
+    open_dialog(Box::new(sector::SectorDialog::new(index).claimed()), lang, cursor_dpi());
+}
+
 /// Creates the window for `dlg` and shows it. `dpi` is the monitor DPI to size it for.
 unsafe fn open_dialog(dlg: Box<dyn Dialog>, lang: Lang, dpi: u32) {
     let hinst = GetModuleHandleW(null());
@@ -712,6 +725,7 @@ pub fn cli(args: &[String]) -> bool {
             Box::new(resize::ResizeDialog::new(vec![src; n.max(1)]))
         }
         "rename" => Box::new(rename::RenameDialog::preview()),
+        "sector" => Box::new(sector::SectorDialog::preview(get("--kind").as_deref())),
         _ => return true,
     };
     let (lw, lh) = dlg.size();
