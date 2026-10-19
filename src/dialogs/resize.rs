@@ -1,0 +1,1 @@
+//! The RESIZE dialog.

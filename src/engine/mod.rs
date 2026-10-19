@@ -28,10 +28,13 @@ pub mod kind;
 pub mod meta;
 pub mod os;
 pub mod pdfread;
+pub mod pdftools;
 pub mod pdfwrite;
 pub mod pipeline;
 pub mod raster;
 pub mod redact;
+pub mod rename;
+pub mod resize;
 pub mod xlsx;
 pub mod zip;
 

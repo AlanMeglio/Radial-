@@ -12,6 +12,8 @@ mod crop;
 mod edit;
 pub mod geom;
 mod redact;
+mod rename;
+mod resize;
 pub mod ui;
 
 use std::cell::RefCell;
