@@ -2,7 +2,7 @@
 
 Drag a file in Explorer, hold **Shift**, and a radial menu blooms under the cursor. Drop the file on a sector: convert
 it, shrink it, read the text out of it, merge PDFs, rename a hundred photos, zip a folder, move it to a folder of your
-own. It works on **any** file. Written in Rust for Windows 11: one 3.3 MB executable, no runtime, zero CPU while idle.
+own. It works on **any** file. Written in Rust for Windows 11: one 4.4 MB executable, no runtime, zero CPU while idle.
 
 <p align="center">
   <img src="docs/ring-convert.png" width="24%" alt="The images ring: eight conversions around a PNG">
@@ -270,7 +270,7 @@ Measured on the release build (Windows 11, one machine, so treat the numbers as 
 
 | | |
 | --- | --- |
-| Executable | 3.3 MB (LTO, `opt-level = 3`, no codec DLLs) |
+| Executable | 4.4 MB (LTO, `opt-level = 3`, no codec DLLs) |
 | Idle CPU | 0 ms over 20 seconds (only two hooks and the tray icon are alive) |
 | Idle memory | about 2 MB private (14 MB working set, mostly shared Windows pages) |
 | A dialog open on a 3000 x 2000 picture | 15 to 26 MB private, back to the idle figure within 1 MB after it closes |
