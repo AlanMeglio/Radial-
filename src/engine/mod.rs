@@ -2,7 +2,7 @@
 //!
 //! * Menus: `detect` (content first, extension second) and `supports` say which conversions a file has.
 //! * Conversions: `convert_file` / `convert_bytes` cover image, PDF, DOCX and text pairs.
-//! * Actions: `compress`, `meta`, `edit`, `annotate`, `background`, `crop`, `redact`, with file-level
+//! * Actions: `compress`, `meta`, `edit`, `annotate`, `background`, `crop`, with file-level
 //!   wrappers in `actions`.
 //! * Windows codecs (PDF rendering, HEIC/AVIF) go through `os`; check `target_availability` /
 //!   `source_availability` before offering a sector, and expect `Error::Unavailable` otherwise.
@@ -32,7 +32,6 @@ pub mod pdftools;
 pub mod pdfwrite;
 pub mod pipeline;
 pub mod raster;
-pub mod redact;
 pub mod rename;
 pub mod resize;
 pub mod xlsx;

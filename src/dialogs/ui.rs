@@ -42,7 +42,6 @@ pub struct Hit {
 pub enum Style {
     Primary,
     Secondary,
-    Danger,
 }
 
 /// Everything a dialog needs to draw itself and to register what can be clicked.
@@ -161,9 +160,6 @@ impl Pen<'_> {
                 if hov { self.pal.accent.mix(Rgba(255, 255, 255, 255), 0.15) } else { self.pal.accent },
                 self.pal.on_accent,
             ),
-            Style::Danger => {
-                (if hov { RED.mix(Rgba(255, 255, 255, 255), 0.15) } else { RED }, Rgba(255, 255, 255, 255))
-            }
             Style::Secondary => (if hov { self.pal.card_hi } else { self.pal.card }, self.pal.text),
         };
         let (bg, fg) = if enabled { (bg, fg) } else { (self.pal.card_hi, self.pal.dim.fade(0.6)) };

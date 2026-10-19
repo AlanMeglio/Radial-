@@ -8,7 +8,6 @@ use super::error::{Error, Result};
 use super::io;
 use super::kind::{detect_head, SourceKind};
 use super::raster::{self, EncodeOptions};
-use super::redact::{self, PageRegion};
 use crate::convert::Fmt;
 use ab_glyph::FontArc;
 use image::DynamicImage;
@@ -69,27 +68,11 @@ pub fn edit_file(src: &Path, ops: &[EditOp]) -> Result<PathBuf> {
     save_image(src, &edit::apply(img, ops)?, "edited", Some(fmt))
 }
 
-/// Redacts an image (`rects`) or a PDF (`regions`, in pixels of pages rendered at `dpi`) into `name (redacted).ext`.
-pub fn redact_file(src: &Path, rects: &[Rect], regions: &[PageRegion], dpi: u32) -> Result<PathBuf> {
-    let bytes = io::read_limited(src)?;
-    let (out, ext) = match detect_head(src.extension().and_then(|e| e.to_str()), &bytes) {
-        Some(SourceKind::Image(_)) => {
-            let (data, fmt) = redact::redact_image(&bytes, rects)?;
-            (data, fmt.ext())
-        }
-        Some(SourceKind::Pdf) => (redact::redact_pdf(&bytes, regions, dpi, 85)?, "pdf"),
-        _ => return Err(Error::Unsupported("REDACT works on images and PDF files".into())),
-    };
-    let (dir, stem) = dir_and_stem(src);
-    io::commit_unique(dir, &format!("{stem} (redacted)"), ext, &out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::background::{Background, Ratio};
     use super::super::error::Error;
     use super::super::raster::{self, testutil::*};
-    use super::super::{os, pdfread, pdfwrite};
     use super::*;
     use image::{DynamicImage, GenericImageView};
 
@@ -146,28 +129,6 @@ mod tests {
         let edited = edit_file(&src, &[EditOp::Rotate90]).unwrap();
         assert_eq!(edited, d.join("a (edited).png"));
         assert_eq!(raster::decode(&std::fs::read(&edited).unwrap()).unwrap().dimensions(), (20, 30));
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn redact_file_handles_images_and_pdfs() {
-        let (d, src) = setup("red", "scan.png", &png(&DynamicImage::ImageRgb8(gradient(40, 30))));
-        let out = redact_file(&src, &[Rect::new(0, 0, 20, 20)], &[], 150).unwrap();
-        assert_eq!(out, d.join("scan (redacted).png"));
-        assert_eq!(raster::decode(&std::fs::read(&out).unwrap()).unwrap().to_rgb8().get_pixel(3, 3).0, [0, 0, 0]);
-        assert!(src.exists());
-
-        let pdf = d.join("letter.pdf");
-        std::fs::write(&pdf, pdfwrite::text_to_pdf("CONFIDENTIAL")).unwrap();
-        let page = os::render_pdf_pages(&std::fs::read(&pdf).unwrap(), &[0], 72, 50_000_000).unwrap().remove(0);
-        let region = PageRegion { page: 0, rect: Rect::new(0, 0, page.width(), page.height()) };
-        let out = redact_file(&pdf, &[], &[region], 72).unwrap();
-        assert_eq!(out, d.join("letter (redacted).pdf"));
-        assert_eq!(pdfread::extract_pages(&std::fs::read(&out).unwrap()).unwrap(), vec![String::new()]);
-
-        let txt = d.join("n.txt");
-        std::fs::write(&txt, b"hello").unwrap();
-        assert!(matches!(redact_file(&txt, &[Rect::new(0, 0, 1, 1)], &[], 72), Err(Error::Unsupported(_))));
         let _ = std::fs::remove_dir_all(&d);
     }
 

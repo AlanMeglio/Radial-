@@ -37,7 +37,7 @@ pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<(String, bool)> with the re
 pub const WM_RING_STEP: u32 = WM_APP + 14;
 /// wparam: `ActionKind::id`; lparam: Box<Vec<PathBuf>>. Opens an action dialog once the drop has returned.
 pub const WM_OPEN_DIALOG: u32 = WM_APP + 15;
-/// Test knob: wparam is an index into `ActionKind::ALL`; opens that dialog on the file named by `RADIAL_OPEN_FILE`.
+/// Test knob: wparam is an `ActionKind::id`; opens that dialog on the file named by `RADIAL_OPEN_FILE`.
 pub const WM_OPEN_TEST: u32 = WM_APP + 16;
 
 const TIMER_FRAME: usize = 1;
@@ -443,8 +443,8 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
             }
         }
         WM_OPEN_TEST => {
-            if let (Some(a), Some(f)) = (ActionKind::ALL.get(wp), std::env::var_os("RADIAL_OPEN_FILE")) {
-                crate::dialogs::open(*a, vec![PathBuf::from(f)]);
+            if let (Some(a), Some(f)) = (ActionKind::from_id(wp), std::env::var_os("RADIAL_OPEN_FILE")) {
+                crate::dialogs::open(a, vec![PathBuf::from(f)]);
             }
         }
         WM_OPEN_DIALOG => {

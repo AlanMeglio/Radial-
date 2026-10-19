@@ -41,7 +41,12 @@ pub enum Icon {
     Note,
     Frame,
     Crop,
-    Redact,
+    Resize,
+    CopyText,
+    Rename,
+    Split,
+    Merge,
+    Sort,
     Folder,
     Zip,
     Unzip,
@@ -71,7 +76,12 @@ impl Icon {
             "ANNOTATE" => Icon::Note,
             "ADD BG" => Icon::Frame,
             "CROP" => Icon::Crop,
-            "REDACT" => Icon::Redact,
+            "RESIZE" => Icon::Resize,
+            "COPY TEXT" => Icon::CopyText,
+            "RENAME" => Icon::Rename,
+            "SPLIT" => Icon::Split,
+            "MERGE" => Icon::Merge,
+            "SORT" => Icon::Sort,
             "ZIP" => Icon::Zip,
             "UNZIP" => Icon::Unzip,
             "SHA-256" => Icon::Hash,
@@ -359,7 +369,12 @@ fn icon_source(i: Icon) -> String {
         Icon::Note => "M5 4.5 L19 4.5 Q20 4.5 20 5.5 L20 15 Q20 16 19 16 L10 16 L6.5 19.5 L6.5 16 L5 16 Q4 16 4 15 L4 5.5 Q4 4.5 5 4.5 Z M8 9 L16 9 M8 12 L13 12",
         Icon::Frame => "R 3 3 18 18 5 R 8 8 8 8 2",
         Icon::Crop => "M6 2.5 L6 15.5 Q6 18 8.5 18 L21.5 18 M2.5 6 L15.5 6 Q18 6 18 8.5 L18 21.5",
-        Icon::Redact => "M4 6.5 L20 6.5 M4 17.5 L20 17.5 R 3.5 10.2 17 3.6 1.4",
+        Icon::Resize => "M14 4 L20 4 L20 10 M20 4 L13.5 10.5 M10 20 L4 20 L4 14 M4 20 L10.5 13.5",
+        Icon::CopyText => "M4 8 L4 5.5 Q4 4 5.5 4 L8 4 M16 4 L18.5 4 Q20 4 20 5.5 L20 8 M20 16 L20 18.5 Q20 20 18.5 20 L16 20 M8 20 L5.5 20 Q4 20 4 18.5 L4 16 M8.5 9 L15.5 9 M12 9 L12 16",
+        Icon::Rename => "M3.5 7 L20.5 7 M3.5 17 L20.5 17 R 5 10 7 4 1 M14.5 10 L14.5 14",
+        Icon::Split => "R 4 3.5 16 6.5 1.5 R 4 14 16 6.5 1.5 M2.5 12 L21.5 12",
+        Icon::Merge => "R 3.5 3.5 8 8 1.5 R 12.5 12.5 8 8 1.5 M11.5 7.5 L16 7.5 L16 12 M8 11.5 L8 16 L12 16",
+        Icon::Sort => "M4 6.5 L20 6.5 M7 12 L20 12 M10 17.5 L20 17.5 M4 17.5 L4 17.6 M4 12 L4 12.1",
         Icon::Folder => {
             "M3 7 Q3 5.5 4.5 5.5 L9 5.5 L11 7.5 L19.5 7.5 Q21 7.5 21 9 L21 17.5 Q21 19 19.5 19 L4.5 19 Q3 19 3 17.5 Z"
         }
@@ -372,7 +387,7 @@ fn icon_source(i: Icon) -> String {
     s.to_string()
 }
 
-const ICONS: [Icon; 24] = [
+const ICONS: [Icon; 29] = [
     Icon::Image,
     Icon::Photo,
     Icon::Doc,
@@ -390,7 +405,12 @@ const ICONS: [Icon; 24] = [
     Icon::Note,
     Icon::Frame,
     Icon::Crop,
-    Icon::Redact,
+    Icon::Resize,
+    Icon::CopyText,
+    Icon::Rename,
+    Icon::Split,
+    Icon::Merge,
+    Icon::Sort,
     Icon::Folder,
     Icon::Zip,
     Icon::Unzip,
@@ -1253,7 +1273,7 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
     };
     let (src, ring) = match kind {
         4 => (SourceKind::Pdf, RingKind::Documents),
-        7 => (SourceKind::Image(Fmt::Png), RingKind::Actions),
+        7 => (SourceKind::Image(Fmt::Png), RingKind::Tools),
         _ => (SourceKind::Image(Fmt::Png), RingKind::Images),
     };
     let menu = build(&[src], ring, 1, &env);
@@ -1467,7 +1487,12 @@ mod tests {
             "ANNOTATE",
             "ADD BG",
             "CROP",
-            "REDACT",
+            "Resize",
+            "Copy text",
+            "Rename",
+            "Split",
+            "Merge",
+            "Sort",
             "Zip",
             "Unzip",
             "Info",

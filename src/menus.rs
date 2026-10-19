@@ -66,7 +66,8 @@ pub fn switch_hint(menu: &Menu, switch: Switch, lang: Lang) -> String {
 pub fn idle(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: Lang) -> Texts {
     let caption = switch_hint(menu, switch, lang);
     let (main, sub) = match (menu.kind, kind) {
-        (RingKind::Actions, _) => (tr(lang, "actions-title").to_string(), size.to_string()),
+        (RingKind::Tools, _) => (tr(lang, "tools-title").to_string(), size.to_string()),
+        (RingKind::Files, _) => (tr(lang, "files-title").to_string(), size.to_string()),
         (_, SourceKind::Image(f)) => (f.label().to_string(), size.to_string()),
         (_, SourceKind::Pdf) => (size.to_string(), "PDF".to_string()),
         (_, SourceKind::Docx) => (size.to_string(), "DOCX".to_string()),
@@ -149,11 +150,12 @@ mod tests {
 
     #[test]
     fn icons_follow_the_english_label_in_every_language() {
-        let m = png_menu(RingKind::Actions);
+        let m = png_menu(RingKind::Tools);
         for lang in [Lang::En, Lang::Es] {
             let s = slots(&m, lang);
-            assert_eq!(s[5].icon, Icon::Crop, "{lang:?}");
-            assert_eq!(s[0].icon, Icon::Compress);
+            assert_eq!(s[4].icon, Icon::Crop, "{lang:?}");
+            assert_eq!(s[2].icon, Icon::Compress);
+            assert_eq!((s[0].icon, s[1].icon), (Icon::CopyText, Icon::Resize));
             assert!(s.iter().all(|x| x.icon != Icon::Folder));
         }
     }
@@ -163,7 +165,7 @@ mod tests {
         let m = png_menu(RingKind::Images);
         let t = idle(SourceKind::Image(Fmt::Png), &m, "1.1 MB", Switch::Both, Lang::En);
         assert_eq!((t.main.as_str(), t.sub.as_str()), ("PNG", "1.1 MB"));
-        assert_eq!(t.caption, "Wheel, Tab or hub: actions");
+        assert_eq!(t.caption, "Wheel, Tab or hub: tools");
         let pdf = build(&[SourceKind::Pdf], RingKind::Documents, 1, &env());
         let t = idle(SourceKind::Pdf, &pdf, "1.1 MB", Switch::Both, Lang::En);
         assert_eq!(
@@ -172,7 +174,7 @@ mod tests {
         );
         let other = build(&[SourceKind::Other], RingKind::Documents, 1, &env());
         let t = idle(SourceKind::Other, &other, "3 KB", Switch::Both, Lang::En);
-        assert_eq!((t.main.as_str(), t.sub.as_str()), ("Actions", "3 KB"), "an unknown file has the actions ring only");
+        assert_eq!((t.main.as_str(), t.sub.as_str()), ("Files", "3 KB"), "an unknown file has the files ring only");
         assert_eq!(t.caption, "", "one ring: nothing to switch to");
     }
 
@@ -188,36 +190,44 @@ mod tests {
 
     #[test]
     fn action_hover_describes_the_action_in_the_active_language() {
-        let m = png_menu(RingKind::Actions);
-        assert_eq!(hover(&m, 6, Switch::Both, Lang::En).sub, "Black out");
-        assert_eq!(hover(&m, 6, Switch::Both, Lang::Es).main, "Tachar");
+        let m = png_menu(RingKind::Tools);
+        assert_eq!(hover(&m, 0, Switch::Both, Lang::En).sub, "Copy the text");
+        assert_eq!(hover(&m, 6, Switch::Both, Lang::En).sub, "Draw on it");
+        assert_eq!(hover(&m, 6, Switch::Both, Lang::Es).main, "Anotar");
+        assert_eq!(hover(&m, 1, Switch::Both, Lang::Es).main, "Achicar");
     }
 
     #[test]
     fn the_switch_hint_names_the_gesture_and_the_destination() {
         let images = png_menu(RingKind::Images);
-        let actions = png_menu(RingKind::Actions);
-        assert_eq!(switch_hint(&images, Switch::Tab, Lang::En), "Wheel or Tab: actions");
-        assert_eq!(switch_hint(&actions, Switch::Hub, Lang::En), "Wheel or hub: documents");
-        assert_eq!(switch_hint(&images, Switch::Both, Lang::Es), "Rueda, Tab o centro: acciones");
+        let tools = png_menu(RingKind::Tools);
+        assert_eq!(switch_hint(&images, Switch::Tab, Lang::En), "Wheel or Tab: tools");
+        assert_eq!(switch_hint(&tools, Switch::Hub, Lang::En), "Wheel or hub: files");
+        assert_eq!(switch_hint(&images, Switch::Both, Lang::Es), "Rueda, Tab o centro: herramientas");
     }
 
     #[test]
     fn dialog_actions_on_many_files_say_why_in_the_pill() {
-        let m = build(&[SourceKind::Image(Fmt::Png); 2], RingKind::Actions, 2, &env());
-        assert_eq!(hover(&m, 5, Switch::Both, Lang::En).caption, "Drop a single image to use this");
-        let bmp = build(&[SourceKind::Image(Fmt::Bmp)], RingKind::Actions, 1, &env());
-        assert_eq!(hover(&bmp, 0, Switch::Both, Lang::En).caption, "Works on JPG, PNG, WEBP only");
+        let m = build(&[SourceKind::Image(Fmt::Png); 2], RingKind::Tools, 2, &env());
+        assert_eq!(hover(&m, 4, Switch::Both, Lang::En).caption, "Drop a single image to use this");
+        let bmp = build(&[SourceKind::Image(Fmt::Bmp)], RingKind::Tools, 1, &env());
+        assert_eq!(hover(&bmp, 2, Switch::Both, Lang::En).caption, "Works on JPG, PNG, WEBP only");
     }
 
     #[test]
     fn scenes_carry_slots_pager_and_caption() {
-        let m = png_menu(RingKind::Actions);
+        let m = png_menu(RingKind::Tools);
         let sc = scene(SourceKind::Image(Fmt::Png), &m, "2 KB", Switch::Both, Lang::En);
-        assert_eq!(sc.slots.len(), 7);
-        assert_eq!(sc.pager, Some((2, 3)));
-        assert_eq!((sc.main.as_str(), sc.sub.as_str()), ("Actions", "2 KB"));
+        assert_eq!(sc.slots.len(), 8);
+        assert_eq!(sc.pager, Some((2, 4)));
+        assert_eq!((sc.main.as_str(), sc.sub.as_str()), ("Tools", "2 KB"));
         let doc = build(&[SourceKind::Docx], RingKind::Documents, 1, &env());
-        assert_eq!(scene(SourceKind::Docx, &doc, "9 KB", Switch::Both, Lang::En).pager, Some((0, 3)));
+        assert_eq!(
+            scene(SourceKind::Docx, &doc, "9 KB", Switch::Both, Lang::En).pager,
+            Some((0, 3)),
+            "Word has documents, images and files"
+        );
+        let other = build(&[SourceKind::Other], RingKind::Files, 1, &env());
+        assert_eq!(scene(SourceKind::Other, &other, "1 KB", Switch::Both, Lang::En).pager, None);
     }
 }

@@ -36,8 +36,8 @@ const RX: f32 = 496.0; // right panel left edge
 const RW: f32 = 420.0; // right panel width
 const TIMER: usize = 1;
 /// The choices of the "menu opens on" control, in display order.
-const START_RINGS: [Option<RingKind>; 4] =
-    [None, Some(RingKind::Documents), Some(RingKind::Images), Some(RingKind::Actions)];
+const START_RINGS: [Option<RingKind>; 5] =
+    [None, Some(RingKind::Documents), Some(RingKind::Images), Some(RingKind::Tools), Some(RingKind::Files)];
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -596,7 +596,13 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
     y += 52.0;
     p.label(tr(l, "start-ring"), RX, y);
     let rsel = START_RINGS.iter().position(|r| *r == cfg.start_ring).unwrap_or(0);
-    let names = [tr(l, "ring-auto"), tr(l, "ring-pick-documents"), tr(l, "ring-pick-images"), tr(l, "ring-actions")];
+    let names = [
+        tr(l, "ring-auto"),
+        tr(l, "ring-pick-documents"),
+        tr(l, "ring-pick-images"),
+        tr(l, "ring-pick-tools"),
+        tr(l, "ring-pick-files"),
+    ];
     p.seg(Sg::StartRing, y + 18.0, &names, rsel);
     y += 52.0;
     draw_autostart(p, y, cfg);
@@ -1131,7 +1137,7 @@ fn do_act(ui: &mut Ui, act: Act) {
                 }
                 Sg::Notify => ui.cfg.notify = [Notify::Off, Notify::Balloon, Notify::Sound, Notify::Both][i.min(3)],
                 Sg::RingSwitch => ui.cfg.ring_switch = [Switch::Both, Switch::Tab, Switch::Hub][i.min(2)],
-                Sg::StartRing => ui.cfg.start_ring = START_RINGS[i.min(3)],
+                Sg::StartRing => ui.cfg.start_ring = START_RINGS[i.min(4)],
                 Sg::Lang => ui.cfg.lang = if i == 0 { Lang::En } else { Lang::Es },
                 Sg::Menu => {
                     set_kind(ui, [8, 4, 7][i.min(2)]);

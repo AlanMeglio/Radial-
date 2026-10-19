@@ -122,13 +122,15 @@ const NOTIFIES: [(&str, Notify); 4] =
     [("off", Notify::Off), ("balloon", Notify::Balloon), ("sound", Notify::Sound), ("both", Notify::Both)];
 const LANGS: [(&str, Lang); 2] = [("en", Lang::En), ("es", Lang::Es)];
 const SWITCHES: [(&str, Switch); 3] = [("both", Switch::Both), ("tab", Switch::Tab), ("hub", Switch::Hub)];
-/// `None` is "match the file" (images open on the formats, everything else on documents). `convert` is the
-/// spelling from before there were three rings.
-const RINGS: [(&str, Option<RingKind>); 5] = [
+/// `None` is "match the file" (images open on the formats, everything else on documents). `convert` and `actions`
+/// are the spellings from before the rings were tools and files.
+const RINGS: [(&str, Option<RingKind>); 7] = [
     ("auto", None),
     ("documents", Some(RingKind::Documents)),
     ("images", Some(RingKind::Images)),
-    ("actions", Some(RingKind::Actions)),
+    ("tools", Some(RingKind::Tools)),
+    ("files", Some(RingKind::Files)),
+    ("actions", Some(RingKind::Tools)),
     ("convert", None),
 ];
 
@@ -423,7 +425,7 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("custom", "Custom", "Propio"),
     ("menu-img", "Image menu", "Menú de imágenes"),
     ("menu-doc", "Document menu", "Menú de documentos"),
-    ("menu-act", "Actions menu", "Menú de acciones"),
+    ("menu-act", "Tools menu", "Menú de herramientas"),
     ("step-of", "Step {} of 3", "Paso {} de 3"),
     ("hold", "Hold", "Mantén"),
     ("no-key-hint", "No key: every file drag opens the menu.", "Sin tecla: cada arrastre de archivo abre el menú."),
@@ -443,7 +445,6 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("act-annotate", "Annotate", "Anotar"),
     ("act-addbg", "Add BG", "Fondo"),
     ("act-crop", "Crop", "Recortar"),
-    ("act-redact", "Redact", "Tachar"),
     ("act-zip", "Zip", "Zip"),
     ("act-unzip", "Unzip", "Extraer"),
     ("act-info", "Info", "Info"),
@@ -502,17 +503,18 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("act-annotate-hint", "Draw on it", "Dibujar"),
     ("act-addbg-hint", "Add backdrop", "Con fondo"),
     ("act-crop-hint", "Trim edges", "Recortar"),
-    ("act-redact-hint", "Black out", "Tapar zonas"),
     ("convert-to", "Convert to", "Convertir a"),
     ("unavailable", "Unavailable", "No disponible"),
-    ("actions-title", "Actions", "Acciones"),
     ("files-n", "{} files", "{} archivos"),
     ("sw-both", "Wheel, Tab or hub", "Rueda, Tab o centro"),
     ("sw-tab", "Wheel or Tab", "Rueda o Tab"),
     ("sw-hub", "Wheel or hub", "Rueda o centro"),
     ("go-next", "{}: {}", "{}: {}"),
     ("ring-documents", "documents", "documentos"),
-    ("ring-name-actions", "actions", "acciones"),
+    ("ring-name-tools", "tools", "herramientas"),
+    ("ring-name-files", "files", "archivos"),
+    ("tools-title", "Tools", "Herramientas"),
+    ("files-title", "Files", "Archivos"),
     ("ring-images", "images", "imágenes"),
     ("why-no-path", "Can't convert this file to that format", "Este archivo no se puede convertir a ese formato"),
     ("why-one-file", "Drop a single image to use this", "Suelta una sola imagen para usar esto"),
@@ -530,7 +532,8 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("ring-switch", "Switch rings with", "Cambiar de anillo con"),
     ("start-ring", "Menu opens on", "El menú abre en"),
     ("ring-auto", "Auto", "Auto"),
-    ("ring-actions", "Actions", "Acciones"),
+    ("ring-pick-tools", "Tools", "Herramientas"),
+    ("ring-pick-files", "Files", "Archivos"),
     ("ring-pick-documents", "Documents", "Documentos"),
     ("ring-pick-images", "Images", "Imágenes"),
     ("sw-label-both", "Tab + hub", "Tab + centro"),
@@ -538,7 +541,6 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("dlg-bg", "Add BG", "Agregar fondo"),
     ("dlg-edit", "Edit Image", "Editar imagen"),
     ("dlg-annotate", "Annotate", "Anotar"),
-    ("dlg-redact", "Redact", "Tachar"),
     ("loading", "Opening image...", "Abriendo imagen..."),
     ("saving", "Saving...", "Guardando..."),
     ("load-failed", "Could not open this image: {}", "No se pudo abrir la imagen: {}"),
@@ -590,14 +592,11 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("ann-font", "Text size", "Tamaño del texto"),
     ("ann-nofont", "No system font found for text", "No hay fuente del sistema para texto"),
     ("ann-text-hint", "Click, type, Enter to place", "Clic, escribe, Enter para colocar"),
-    ("red-areas", "Areas to black out", "Zonas a tapar"),
-    ("red-count", "{} areas", "{} zonas"),
     (
         "red-hint",
         "Drag over the picture to mark|what to remove. The saved copy|has those pixels replaced, not|covered. The original is never changed.",
         "Arrastra sobre la imagen para marcar|lo que quitar. La copia guardada|tiene esos píxeles reemplazados, no|tapados. El original nunca cambia.",
     ),
-    ("red-apply", "Redact and save", "Tachar y guardar"),
 ];
 
 /// Looks a UI string up; unknown keys give an empty string (caught by the unit tests, not at runtime).
@@ -639,7 +638,7 @@ mod tests {
             lang: Lang::Es,
             onboarded: true,
             ring_switch: Switch::Hub,
-            start_ring: Some(RingKind::Actions),
+            start_ring: Some(RingKind::Tools),
         };
         let (back, warns) = Config::parse(&c.to_text());
         assert_eq!(back, c);
@@ -655,7 +654,7 @@ mod tests {
 start_ring = actions
 ",
         );
-        assert_eq!((c.ring_switch, c.start_ring), (Switch::Tab, Some(RingKind::Actions)));
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Tab, Some(RingKind::Tools)));
         assert!(w.is_empty());
         let (c, w) = Config::parse(
             "ring_switch = sideways

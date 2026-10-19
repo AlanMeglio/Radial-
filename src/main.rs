@@ -465,7 +465,7 @@ fn main() {
         if flag == "--open" {
             match ring::ActionKind::from_name(action).filter(|a| !a.is_immediate()) {
                 Some(a) => unsafe { open_standalone(a, file.into()) },
-                None => eprintln!("usage: radial --open crop|bg|edit|annotate|redact <image>"),
+                None => eprintln!("usage: radial --open crop|bg|edit|annotate <image>"),
             }
             return;
         }

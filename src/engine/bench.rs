@@ -5,7 +5,7 @@
 use super::kind::{SourceKind, Target};
 use super::pipeline::{convert_bytes, ConvertOptions};
 use super::raster::testutil::{jpeg, png};
-use super::{background, compress, crop, meta, os, pdfwrite, redact};
+use super::{background, compress, crop, meta, os, pdfwrite};
 use crate::convert::Fmt;
 use image::DynamicImage;
 
@@ -67,10 +67,6 @@ fn bench_report() {
     });
     t("3000x2000 crop 16:9", &mut || {
         crop::crop(&img, crop::largest_centered(3000, 2000, crop::Aspect::Ratio(16, 9))).unwrap();
-    });
-    t("3000x2000 redact 4 boxes (PNG round trip)", &mut || {
-        let r = [crop::Rect::new(10, 10, 500, 300); 4];
-        redact::redact_image(&png_bytes, &r).unwrap();
     });
     let text: String = (0..519)
         .map(|i| {

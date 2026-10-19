@@ -1,4 +1,4 @@
-//! The action dialogs (CROP, ADD BG, EDIT, ANNOTATE, REDACT): native Win32 windows, custom drawn with tiny-skia
+//! The action dialogs (CROP, ADD BG, EDIT, ANNOTATE): native Win32 windows, custom drawn with tiny-skia
 //! in the settings window's visual language. A dialog is created when an action is dropped on, owns every buffer
 //! it needs, runs heavy work on a worker thread and frees everything when it closes.
 //!
@@ -11,7 +11,6 @@ mod bg;
 mod crop;
 mod edit;
 pub mod geom;
-mod redact;
 mod rename;
 mod resize;
 pub mod ui;
@@ -262,7 +261,6 @@ pub unsafe fn open(action: ActionKind, paths: Vec<PathBuf>) {
         ActionKind::AddBg => Box::new(bg::BgDialog::new(path)),
         ActionKind::Edit => Box::new(edit::EditDialog::new(path)),
         ActionKind::Annotate => Box::new(annotate::AnnotateDialog::new(path)),
-        ActionKind::Redact => Box::new(redact::RedactDialog::new(path)),
         _ => return,
     };
     open_dialog(dlg, lang, cursor_dpi());
@@ -691,7 +689,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Offscreen rendering for review: `radial --dialog crop|bg|edit|annotate|redact out.png [--image f] [--lang es]`
+// Offscreen rendering for review: `radial --dialog crop|bg|edit|annotate out.png [--image f] [--lang es]`
 // ---------------------------------------------------------------------------------------------------------------
 
 pub fn cli(args: &[String]) -> bool {
@@ -706,7 +704,6 @@ pub fn cli(args: &[String]) -> bool {
         "bg" => Box::new(bg::BgDialog::new(src)),
         "edit" => Box::new(edit::EditDialog::new(src)),
         "annotate" => Box::new(annotate::AnnotateDialog::new(src)),
-        "redact" => Box::new(redact::RedactDialog::new(src)),
         _ => return true,
     };
     let (lw, lh) = dlg.size();

@@ -48,7 +48,7 @@ Radial - drag a file, hold Shift, drop it on a radial menu.
 
 Usage:
   radial.exe                          run in the tray (the normal way)
-  radial.exe --open ACTION IMAGE      open one action dialog, no tray: crop, bg, edit, annotate, redact
+  radial.exe --open ACTION IMAGE      open one action dialog, no tray: crop, bg, edit, annotate
   radial.exe --formats                what this machine can read and write
   radial.exe --autostart on|off       add or remove the start-with-Windows entry
   radial.exe --version | --help
@@ -57,7 +57,7 @@ Development and documentation (render to a PNG, no window):
   --preview out.png [--theme T] [--hover N] [--menu 8|4|7] [--accent #rrggbb] [--dpi F]
   --sheet out.png                     every theme on one contact sheet
   --settings out.png [--tab N] [--step N] [--lang es] [--light] [--theme T] [--menu 8|4|7]
-  --dialog crop|bg|edit|annotate|redact --out out.png [--image F] [--script S] [--lang es] [--light]
+  --dialog crop|bg|edit|annotate --out out.png [--image F] [--script S] [--lang es] [--light]
   --tray-icon out.png [--size N]      the tray icon at any size
   --bench [--theme T] [--dpi F]       time to bake and render a frame
 

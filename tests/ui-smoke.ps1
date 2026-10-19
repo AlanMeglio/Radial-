@@ -1,6 +1,6 @@
 # UI smoke test: starts a private copy of radial.exe (own mutex, own %APPDATA%), checks that the first-run
 # onboarding opens, takes a screenshot of the window, closes it and compares memory before/after, opens and closes
-# each action dialog (CROP, ADD BG, EDIT, ANNOTATE, REDACT) on a 3000x2000 picture checking that the window appears,
+# each action dialog (CROP, ADD BG, EDIT, ANNOTATE) on a 3000x2000 picture checking that the window appears,
 # draws something and that the memory comes back, then measures idle CPU of the tray process.
 # Usage: powershell -File tests\ui-smoke.ps1 [-Exe path] [-Out dir]   (exit code 1 when a check fails)
 param(
@@ -72,8 +72,8 @@ try {
     $p.Refresh(); "after $Cycles open/close cycles: Private $([int]($p.PrivateMemorySize64/1KB)) KB, handles $($p.HandleCount)"
     # Every action dialog: open it through the test message, wait for the picture to load, look at it, close it.
     $p.Refresh(); $before = $p.PrivateMemorySize64
-    foreach ($name in "crop", "bg", "edit", "annotate", "redact") {
-        $idx = @{ crop = 5; bg = 4; edit = 2; annotate = 3; redact = 6 }[$name]
+    foreach ($name in "crop", "bg", "edit", "annotate") {
+        $idx = @{ crop = 5; bg = 4; edit = 2; annotate = 3 }[$name]
         [W]::PostMessage($main, 0x8010, [IntPtr]$idx, [IntPtr]::Zero) | Out-Null
         $dh = [IntPtr]::Zero
         for ($i = 0; $i -lt 40 -and $dh -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 100; $dh = [W]::FindWindow("RadialDialog", [NullString]::Value) }
