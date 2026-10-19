@@ -19,6 +19,7 @@ mod settings;
 mod shell;
 mod theme;
 mod trigger;
+mod universal;
 
 use std::cell::RefCell;
 use std::ffi::c_void;

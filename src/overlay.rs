@@ -727,8 +727,11 @@ unsafe fn run(op: Op, files: Vec<PathBuf>) {
         Op::Convert(target) => {
             std::thread::spawn(move || jobs::convert(target, files, cfg));
         }
-        Op::Action(a) if a.is_immediate() => {
+        Op::Action(a @ (ActionKind::Compress | ActionKind::Metadata)) => {
             std::thread::spawn(move || jobs::immediate(a, files, cfg));
+        }
+        Op::Action(a) if a.is_immediate() => {
+            std::thread::spawn(move || crate::universal::run(a, files, cfg));
         }
         Op::Action(a) => {
             let Some(first) = files.into_iter().next() else { return };

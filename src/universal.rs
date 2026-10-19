@@ -73,8 +73,12 @@ fn zip(files: &[PathBuf], cfg: &Config) -> Result<Option<String>, String> {
     let dir = first.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let dest = free_name(dir, &zip_base(files), Some("zip"));
     let report = fileops::zip_paths(files, &dest).map_err(|e| e.to_string())?;
-    let kept = place(first, dest, cfg)?.unwrap_or_else(|| first.clone());
+    // `place` names the result after the file it is given; the archive is named after `zip_base`, so pass that.
+    let base = dir.join(zip_base(files));
     let l = cfg.lang;
+    let Some(kept) = place(&base, dest, cfg)? else {
+        return Ok(Some(fill(tr(l, "skipped"), &[&format!("{}.zip", zip_base(files))])));
+    };
     Ok(Some(fill(
         tr(l, "zip-done"),
         &[
@@ -107,10 +111,7 @@ fn unzip(files: &[PathBuf], cfg: &Config) -> Result<Option<String>, String> {
 /// "Name: report.pdf" lines for one file, using the localized label of each property.
 fn property_lines(path: &Path, l: Lang) -> Result<Vec<String>, String> {
     let props = fileops::properties(path).map_err(|e| e.to_string())?;
-    Ok(props
-        .into_iter()
-        .map(|(key, value)| format!("{}: {value}", tr(l, &format!("prop-{key}"))))
-        .collect())
+    Ok(props.into_iter().map(|(key, value)| format!("{}: {value}", tr(l, &format!("prop-{key}")))).collect())
 }
 
 fn info(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
@@ -208,11 +209,12 @@ mod tests {
         let msg = zip(&[d.join("a.txt"), d.join("sub")], &cfg).unwrap().unwrap();
         assert!(msg.contains(".zip"), "{msg}");
         let archive = d.join(format!("{}.zip", zip_base(&[d.join("a.txt"), d.join("sub")])));
-        assert!(archive.exists(), "{archive:?}");
+        let listing: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(archive.exists(), "{archive:?} not in {listing:?} ({msg})");
         let out = d.join("out");
         std::fs::create_dir_all(&out).unwrap();
         let cfg = Config { out_dir: Some(out.to_string_lossy().into_owned()), ..Config::default() };
-        let msg = unzip(&[archive.clone()], &cfg).unwrap().unwrap();
+        let msg = unzip(std::slice::from_ref(&archive), &cfg).unwrap().unwrap();
         assert!(msg.contains('2'), "{msg}");
         let root = out.join(archive.file_stem().unwrap());
         assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "hello radial");
@@ -227,6 +229,32 @@ mod tests {
         let h = fileops::sha256_file(&d.join("abc.txt")).unwrap();
         assert_eq!(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn every_property_the_engine_can_report_has_a_label_in_both_languages() {
+        for key in [
+            "name",
+            "type",
+            "size",
+            "created",
+            "modified",
+            "title",
+            "author",
+            "last-modified-by",
+            "doc-created",
+            "doc-modified",
+            "company",
+            "pages",
+            "sheets",
+            "slides",
+            "creator",
+            "producer",
+        ] {
+            for l in [Lang::En, Lang::Es] {
+                assert!(!tr(l, &format!("prop-{key}")).is_empty(), "{key} {l:?}");
+            }
+        }
     }
 
     #[test]

@@ -481,6 +481,7 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("prop-company", "Company", "Empresa"),
     ("prop-pages", "Pages", "Páginas"),
     ("prop-sheets", "Sheets", "Hojas"),
+    ("prop-slides", "Slides", "Diapositivas"),
     ("prop-creator", "Created with", "Creado con"),
     ("prop-producer", "Produced by", "Generado por"),
     ("act-compress-hint", "Smaller file", "Más liviano"),
