@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::error::{Error, Result};
@@ -537,32 +536,49 @@ fn read_exif_block(f: &mut File) -> Option<Vec<u8>> {
     None
 }
 
-type TakenCache = Mutex<Option<HashMap<PathBuf, Option<Parts>>>>;
-static TAKEN: TakenCache = Mutex::new(None);
-
-/// EXIF dates are cached per path: planning runs on every keystroke and must not reread thousands of photos.
-fn taken_parts(p: &Path) -> Option<Parts> {
-    if let Some(hit) = TAKEN.lock().ok()?.as_ref().and_then(|m| m.get(p).copied()) {
-        return hit;
-    }
-    let found = File::open(p).ok().and_then(|mut f| read_exif_block(&mut f)).and_then(|b| exif_taken(&b));
-    if let Ok(mut g) = TAKEN.lock() {
-        g.get_or_insert_with(HashMap::new).insert(p.to_path_buf(), found);
-    }
-    found
+/// What planning needs to know about one path, read once.
+struct Info {
+    dir: bool,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+    /// EXIF date, read the first time a rule asks for it (`Some(None)`: looked, none found).
+    taken: Option<Option<Parts>>,
 }
 
-fn forget_dates() {
-    if let Ok(mut g) = TAKEN.lock() {
-        *g = None;
+/// File facts remembered between plans. Planning runs on every keystroke of a dialog and must not stat or reread
+/// thousands of files each time; the owner calls [`Scan::forget`] when the files may have changed (after an apply
+/// or an undo).
+#[derive(Default)]
+pub struct Scan {
+    files: HashMap<PathBuf, Option<Info>>,
+}
+
+impl Scan {
+    pub fn forget(&mut self) {
+        self.files.clear();
+    }
+
+    fn info(&mut self, p: &Path) -> Option<&mut Info> {
+        self.files
+            .entry(p.to_path_buf())
+            .or_insert_with(|| {
+                let m = std::fs::symlink_metadata(p).ok()?;
+                Some(Info { dir: m.is_dir(), modified: m.modified().ok(), created: m.created().ok(), taken: None })
+            })
+            .as_mut()
     }
 }
 
-fn stamp_for(meta: &Metadata, path: &Path, d: &DateStamp) -> Option<String> {
+fn stamp_for(info: &mut Info, path: &Path, d: &DateStamp) -> Option<String> {
     let parts = match d.source {
-        DateSource::Modified => meta.modified().ok().and_then(local_parts),
-        DateSource::Created => meta.created().ok().and_then(local_parts),
-        DateSource::Taken => taken_parts(path).or_else(|| meta.modified().ok().and_then(local_parts)),
+        DateSource::Modified => info.modified.and_then(local_parts),
+        DateSource::Created => info.created.and_then(local_parts),
+        DateSource::Taken => {
+            let taken = *info.taken.get_or_insert_with(|| {
+                File::open(path).ok().and_then(|mut f| read_exif_block(&mut f)).and_then(|b| exif_taken(&b))
+            });
+            taken.or_else(|| info.modified.and_then(local_parts))
+        }
     }?;
     Some(stamp_text(parts, d.format))
 }
@@ -577,16 +593,21 @@ fn path_key(p: &Path) -> String {
 /// Plans `rule` over `paths`; the numbering follows the order of `paths`. Reads the disk (metadata, EXIF, folder
 /// listings) but never changes it.
 pub fn plan(paths: &[PathBuf], rule: &Rule) -> Vec<Item> {
+    plan_with(&mut Scan::default(), paths, rule)
+}
+
+/// [`plan`] that reuses what `scan` already knows about the files.
+pub fn plan_with(scan: &mut Scan, paths: &[PathBuf], rule: &Rule) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::with_capacity(paths.len());
     for (index, from) in paths.iter().enumerate() {
         let name = name_of(from);
-        let Ok(meta) = std::fs::symlink_metadata(from) else {
+        let Some(info) = scan.info(from) else {
             items.push(Item { from: from.clone(), to: from.clone(), status: Status::Invalid("missing".into()) });
             continue;
         };
-        let dir = meta.is_dir();
+        let dir = info.dir;
         let (stem, ext) = split_name(&name, dir);
-        let stamp = rule.date.as_ref().and_then(|d| stamp_for(&meta, from, d));
+        let stamp = rule.date.as_ref().and_then(|d| stamp_for(info, from, d));
         let stem2 = new_stem(stem, rule, index, stamp.as_deref());
         let ext2 = if rule.ext_lowercase && !dir { ext.to_lowercase() } else { ext.to_string() };
         let new_name = format!("{stem2}{ext2}");
@@ -745,7 +766,6 @@ pub fn apply(plan: &[Item]) -> Result<Undo> {
     let moves: Vec<(PathBuf, PathBuf)> =
         plan.iter().filter(|i| i.status == Status::Ok).map(|i| (i.from.clone(), i.to.clone())).collect();
     execute(&moves)?;
-    forget_dates();
     let entries = moves
         .into_iter()
         .map(|(original, current)| {
@@ -907,7 +927,6 @@ pub fn undo_report(u: &Undo) -> Result<UndoReport> {
     }
     let moves: Vec<(PathBuf, PathBuf)> = todo.iter().map(|e| (e.current.clone(), e.original.clone())).collect();
     execute(&moves)?;
-    forget_dates();
     report.restored = moves.len();
     Ok(report)
 }
@@ -1455,6 +1474,12 @@ mod tests {
         let t = std::time::Instant::now();
         let items = plan(&ps, &r);
         let took = t.elapsed();
+        let mut scan = Scan::default();
+        plan_with(&mut scan, &ps, &r);
+        let t2 = std::time::Instant::now();
+        plan_with(&mut scan, &ps, &r);
+        let warm = t2.elapsed();
+        assert!(warm < took, "a warm scan skips the stats: {warm:?} vs {took:?}");
         assert_eq!(items.len(), 5000);
         assert!(items.iter().all(|i| i.status == Status::Ok));
         assert_eq!(items[4999].new_name(), "5000_img_04999.JPG");
