@@ -21,6 +21,7 @@ pub mod crop;
 pub mod docx;
 pub mod edit;
 pub mod error;
+pub mod fileops;
 pub mod io;
 pub mod jpeg;
 pub mod kind;
@@ -31,6 +32,7 @@ pub mod pdfwrite;
 pub mod pipeline;
 pub mod raster;
 pub mod redact;
+pub mod xlsx;
 pub mod zip;
 
 #[allow(unused_imports)] // re-exported for the UI layer
