@@ -93,7 +93,7 @@ impl Icon {
 }
 
 pub struct Slot {
-    pub label: &'static str,
+    pub label: String,
     pub enabled: bool,
     pub icon: Icon,
 }
@@ -1042,7 +1042,7 @@ impl Renderer {
                 pm.stroke_path(path, &solid(txt, ta), &stroke(1.6), tf, None);
             }
             if let Some(face) = self.face.as_mut() {
-                let label = if th.caps { slot.label.to_uppercase() } else { slot.label.to_string() };
+                let label = if th.caps { slot.label.to_uppercase() } else { slot.label.clone() };
                 let px = 11.0 * look.scale * k;
                 let ly = r_mid_pt.1 + 15.5 * k * look.scale;
                 face.draw(pm, &label, r_mid_pt.0, ly, px, txt, ta, th.tracking * px);
@@ -1270,6 +1270,7 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
             _ => Availability::Available,
         },
         source: &|_| Availability::Available,
+        custom: &[],
     };
     let (src, ring) = match kind {
         4 => (SourceKind::Pdf, RingKind::Documents),

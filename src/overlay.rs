@@ -133,6 +133,8 @@ struct Ov {
     /// Hovered sector including greyed-out ones (they explain themselves in the pill).
     hover_any: Option<usize>,
     files: Vec<PathBuf>,
+    /// The user's own sectors that apply to the dragged files.
+    custom: Vec<crate::ring::Custom>,
     last: Instant,
     /// Seconds into the drop confirmation, if one is playing.
     confirm_t: Option<f32>,
@@ -242,6 +244,7 @@ pub unsafe fn show(x: i32, y: i32) {
         hover: None,
         hover_any: None,
         files: vec![],
+        custom: vec![],
         last: Instant::now(),
         confirm_t: None,
         kind: None,
@@ -484,9 +487,36 @@ fn size_text(files: &[PathBuf], lang: Lang) -> String {
 }
 
 /// The menu for `kind` on this machine: what the engine can read and write right now.
-fn menu_for(kinds: &[SourceKind], ring: RingKind, files: usize) -> Menu {
-    let env = Env { target: &engine::pair_availability, source: &engine::source_availability };
+fn menu_for(kinds: &[SourceKind], ring: RingKind, files: usize, custom: &[crate::ring::Custom]) -> Menu {
+    let env = Env { target: &engine::pair_availability, source: &engine::source_availability, custom };
     build(kinds, ring, files, &env)
+}
+
+/// The user's sectors that apply to every dragged file, worded for the hub.
+fn custom_for(files: &[PathBuf], lang: Lang) -> Vec<crate::ring::Custom> {
+    use crate::sectors::Kind;
+    crate::sectors::load()
+        .into_iter()
+        .enumerate()
+        .filter(|(_, s)| s.applies_to(files))
+        .map(|(index, s)| {
+            let name = s
+                .target
+                .file_name()
+                .map_or_else(|| s.target.display().to_string(), |n| n.to_string_lossy().into_owned());
+            let key = match s.kind {
+                Kind::MoveTo => "cus-move",
+                Kind::CopyTo => "cus-copy",
+                Kind::OpenWith => "cus-open",
+            };
+            crate::ring::Custom {
+                index,
+                label: s.label,
+                hint: jobs::fill(crate::config::tr(lang, key), &[&name]),
+                kind: s.kind,
+            }
+        })
+        .collect()
 }
 
 /// Installs `menu` as the live ring: scene, sector springs and the baked glass for its sector count.
@@ -513,7 +543,7 @@ fn step_ring(o: &mut Ov, delta: i32) {
         return;
     }
     let next = menu.neighbour(delta);
-    let fresh = menu_for(&o.kinds, next, o.files.len());
+    let fresh = menu_for(&o.kinds, next, o.files.len(), &o.custom);
     install_menu(o, kind, fresh);
 }
 
@@ -657,7 +687,8 @@ unsafe extern "system" fn drag_enter(
         o.size_txt = size_text(&files, cfg.lang);
         o.files = files;
         let wanted = crate::ring::first_ring(&kinds, cfg.start_ring);
-        let menu = menu_for(&kinds, wanted, o.files.len());
+        o.custom = custom_for(&o.files, cfg.lang);
+        let menu = menu_for(&kinds, wanted, o.files.len(), &o.custom);
         TAB_SWITCH.store(menu.switchable() && o.switch.tab(), Relaxed);
         WHEEL_SWITCH.store(menu.switchable(), Relaxed);
         o.kinds = kinds;
@@ -726,6 +757,9 @@ unsafe fn run(op: Op, files: Vec<PathBuf>) {
     match op {
         Op::Convert(target) => {
             std::thread::spawn(move || jobs::convert(target, files, cfg));
+        }
+        Op::Custom(index) => {
+            std::thread::spawn(move || crate::universal::run_custom(index, files, cfg));
         }
         Op::Action(a @ (ActionKind::Compress | ActionKind::Metadata)) => {
             std::thread::spawn(move || jobs::immediate(a, files, cfg));

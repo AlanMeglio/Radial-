@@ -4,8 +4,8 @@
 //! tested without touching Windows codecs. The overlay turns a [`Menu`] into a scene.
 //!
 //! Every file gets the rings that apply to it: documents (menu 1) and images (menu 2) convert it, tools (menu 3)
-//! hold what only this kind of file has (a picture's editing tools, a PDF's split), and files (menu 4) hold what works
-//! on any file, in the same order every time. A ring is offered only when something in it can work for the files
+//! hold what only this kind of file has (a picture's editing tools, a PDF's split), files (menu 4) hold what works
+//! on any file, in the same order every time, and "mine" (menu 5) holds the user's own sectors when they have any. A ring is offered only when something in it can work for the files
 //! being dragged, so there are never rings full of dead sectors; a sector is greyed out (with the reason) only when
 //! this machine lacks something or just some of the files fit.
 
@@ -19,10 +19,13 @@ pub enum RingKind {
     Images,
     Tools,
     Files,
+    /// The user's own sectors; only there when at least one applies to the dragged files.
+    Mine,
 }
 
 impl RingKind {
-    pub const ALL: [RingKind; 4] = [RingKind::Documents, RingKind::Images, RingKind::Tools, RingKind::Files];
+    pub const ALL: [RingKind; 5] =
+        [RingKind::Documents, RingKind::Images, RingKind::Tools, RingKind::Files, RingKind::Mine];
 
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|r| *r == self).unwrap_or(0)
@@ -48,6 +51,7 @@ impl RingKind {
             RingKind::Images => "ring-images",
             RingKind::Tools => "ring-name-tools",
             RingKind::Files => "ring-name-files",
+            RingKind::Mine => "ring-name-mine",
         }
     }
 }
@@ -245,6 +249,19 @@ impl ActionKind {
 pub enum Op {
     Convert(Target),
     Action(ActionKind),
+    /// One of the user's own sectors, by its index in `sectors::load()`.
+    Custom(usize),
+}
+
+/// A user sector as the menu needs it: which one it is and how it reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Custom {
+    /// Index in `sectors::load()`.
+    pub index: usize,
+    pub label: String,
+    /// What it does, for the hub while hovered ("Move to Invoices").
+    pub hint: String,
+    pub kind: crate::sectors::Kind,
 }
 
 /// Why a sector is greyed out. Shown in the caption under the ring, never hidden.
@@ -267,6 +284,8 @@ pub struct Item {
     pub op: Op,
     pub enabled: bool,
     pub reason: Option<Reason>,
+    /// The user's own wording for a custom sector (label and hint); every other sector reads from its `op`.
+    pub custom: Option<Custom>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,6 +321,8 @@ pub struct Env<'a> {
     pub target: &'a dyn Fn(SourceKind, Target) -> Availability,
     /// Can this kind of file be read here?
     pub source: &'a dyn Fn(SourceKind) -> Availability,
+    /// The user's sectors that apply to the dragged files.
+    pub custom: &'a [Custom],
 }
 
 /// Sectors of the document ring (menu 1) for a PDF, clockwise from the top.
@@ -378,7 +399,7 @@ fn all_of(kinds: &[SourceKind], want: SourceKind) -> bool {
 }
 
 /// The operations a ring has for these files, before availability: only what at least one file can do.
-fn ring_ops(ring: RingKind, kinds: &[SourceKind]) -> Vec<Op> {
+fn ring_ops(ring: RingKind, kinds: &[SourceKind], custom: &[Custom]) -> Vec<Op> {
     let Some(&lead) = kinds.first() else { return vec![] };
     let act = |list: &[ActionKind]| list.iter().map(|&a| Op::Action(a)).collect::<Vec<_>>();
     match ring {
@@ -389,6 +410,7 @@ fn ring_ops(ring: RingKind, kinds: &[SourceKind]) -> Vec<Op> {
             act(&[ActionKind::CopyText])
         }
         RingKind::Tools => vec![],
+        RingKind::Mine => custom.iter().map(|c| Op::Custom(c.index)).collect(),
         RingKind::Files => {
             let mut ops = Vec::new();
             if all_of(kinds, SourceKind::Archive) {
@@ -416,9 +438,15 @@ fn ring_ops(ring: RingKind, kinds: &[SourceKind]) -> Vec<Op> {
     }
 }
 
-/// The rings these files have, in wheel order. The files ring is always there, so there is always one.
+/// The rings these files have, in wheel order, given how many of the user's sectors apply. The files ring is always
+/// there, so there is always one.
+pub fn rings_with(kinds: &[SourceKind], custom: &[Custom]) -> Vec<RingKind> {
+    RingKind::ALL.into_iter().filter(|&r| !ring_ops(r, kinds, custom).is_empty() || r == RingKind::Files).collect()
+}
+
+/// `rings_with` for someone with no sectors of their own.
 pub fn rings_for(kinds: &[SourceKind]) -> Vec<RingKind> {
-    RingKind::ALL.into_iter().filter(|&r| !ring_ops(r, kinds).is_empty() || r == RingKind::Files).collect()
+    rings_with(kinds, &[])
 }
 
 /// The ring a drag opens on: the user's choice or the file's natural one, falling back to the first the files have.
@@ -435,13 +463,13 @@ pub fn first_ring(kinds: &[SourceKind], wanted: Option<RingKind>) -> RingKind {
 
 /// The menu to show for `ring` while dragging `files` files of these kinds (the first is the one the layout follows).
 pub fn build(kinds: &[SourceKind], ring: RingKind, files: usize, env: &Env) -> Menu {
-    let rings = rings_for(kinds);
+    let rings = rings_with(kinds, env.custom);
     let ring = if rings.contains(&ring) { ring } else { first_ring(kinds, None) };
     let lead = kinds.first().copied().unwrap_or(SourceKind::Other);
     let src = kinds.iter().try_fold((), |(), &k| availability((env.source)(k)));
     // Reading text out of a picture needs a Windows OCR language: asked once, and only when a sector needs it.
     let ocr = if ring == RingKind::Tools { (env.target)(lead, Target::Txt) } else { Availability::Available };
-    let items = ring_ops(ring, kinds)
+    let items = ring_ops(ring, kinds, env.custom)
         .into_iter()
         .map(|op| {
             let check = src.clone().and_then(|_| match op {
@@ -453,8 +481,13 @@ pub fn build(kinds: &[SourceKind], ring: RingKind, files: usize, env: &Env) -> M
                     }
                 }
                 Op::Action(a) => action_check(a, kinds, files, &ocr),
+                Op::Custom(_) => Ok(()),
             });
-            item(op, check)
+            let mut it = item(op, check);
+            if let Op::Custom(i) = op {
+                it.custom = env.custom.iter().find(|c| c.index == i).cloned();
+            }
+            it
         })
         .collect();
     Menu { kind: ring, items, rings }
@@ -489,7 +522,7 @@ fn availability(a: Availability) -> Result<(), Reason> {
 }
 
 fn item(op: Op, check: Result<(), Reason>) -> Item {
-    Item { op, enabled: check.is_ok(), reason: check.err() }
+    Item { op, enabled: check.is_ok(), reason: check.err(), custom: None }
 }
 
 /// Formats COMPRESS can recompress, and the ones the metadata tools understand.
@@ -565,7 +598,7 @@ mod tests {
     use super::*;
 
     fn all_ok() -> Env<'static> {
-        Env { target: &|_, _| Availability::Available, source: &|_| Availability::Available }
+        Env { target: &|_, _| Availability::Available, source: &|_| Availability::Available, custom: &[] }
     }
 
     const PNG: SourceKind = SourceKind::Image(Fmt::Png);
@@ -578,6 +611,7 @@ mod tests {
         match op {
             Op::Convert(t) => t.label(),
             Op::Action(a) => a.label_key(),
+            Op::Custom(_) => "custom",
         }
     }
 
@@ -641,6 +675,14 @@ mod tests {
     fn each_kind_of_file_has_exactly_the_rings_that_apply_to_it() {
         use RingKind::*;
         assert_eq!(rings_for(&[PNG]), [Documents, Images, Tools, Files]);
+        let mine = [Custom {
+            index: 0,
+            label: "Invoices".into(),
+            hint: "Move to Invoices".into(),
+            kind: crate::sectors::Kind::MoveTo,
+        }];
+        assert_eq!(rings_with(&[SourceKind::Other], &mine), [Files, Mine], "the user's ring comes last");
+        assert_eq!(rings_with(&[PNG], &mine), [Documents, Images, Tools, Files, Mine]);
         assert_eq!(rings_for(&[SourceKind::Pdf]), [Documents, Images, Tools, Files]);
         for k in [SourceKind::Docx, SourceKind::Text, SourceKind::Csv, SourceKind::Sheet] {
             assert_eq!(rings_for(&[k]), [Documents, Images, Files], "{k:?} has no tools of its own");
@@ -684,7 +726,7 @@ mod tests {
             .iter()
             .map(|i| match i.op {
                 Op::Action(a) => a,
-                Op::Convert(_) => panic!("conversion in the tools ring"),
+                Op::Convert(_) | Op::Custom(_) => panic!("only actions in the tools ring"),
             })
             .collect();
         assert_eq!(tools, ActionKind::PICTURE_TOOLS);
@@ -720,6 +762,7 @@ mod tests {
                 _ => Availability::Available,
             },
             source: &|_| Availability::Available,
+            custom: &[],
         };
         let pic = build(&[PNG], RingKind::Tools, 1, &env);
         let copy = item(&pic, ActionKind::CopyText);
@@ -798,6 +841,7 @@ mod tests {
                 _ => Availability::Available,
             },
             source: &|_| Availability::Available,
+            custom: &[],
         };
         let m = build(&[SourceKind::Image(Fmt::Jpg)], RingKind::Images, 1, &env);
         let avif = m.items.iter().find(|i| i.op == Op::Convert(Target::Image(Fmt::Avif))).unwrap();
@@ -811,6 +855,7 @@ mod tests {
         let env = Env {
             target: &|_, _| Availability::Available,
             source: &|_| Availability::Unavailable("HEIC decoder missing".into()),
+            custom: &[],
         };
         for ring in RingKind::ALL {
             let m = build(&[SourceKind::Image(Fmt::Heic)], ring, 1, &env);
@@ -898,12 +943,40 @@ mod tests {
     }
 
     #[test]
+    fn the_users_own_sectors_get_their_own_ring_with_their_own_words() {
+        let mine = [
+            Custom {
+                index: 2,
+                label: "Invoices".into(),
+                hint: "Move to Invoices".into(),
+                kind: crate::sectors::Kind::MoveTo,
+            },
+            Custom {
+                index: 5,
+                label: "Editor".into(),
+                hint: "Open with Editor".into(),
+                kind: crate::sectors::Kind::OpenWith,
+            },
+        ];
+        let env = Env { target: &|_, _| Availability::Available, source: &|_| Availability::Available, custom: &mine };
+        let m = build(&[SourceKind::Pdf], RingKind::Mine, 1, &env);
+        assert_eq!(m.kind, RingKind::Mine);
+        assert_eq!(m.items.iter().map(|i| i.op).collect::<Vec<_>>(), [Op::Custom(2), Op::Custom(5)]);
+        assert!(m.items.iter().all(|i| i.enabled));
+        assert_eq!(m.items[0].custom.as_ref().map(|c| c.label.as_str()), Some("Invoices"));
+        assert_eq!(m.items[1].custom.as_ref().map(|c| c.hint.as_str()), Some("Open with Editor"));
+        assert_eq!(m.neighbour(1), RingKind::Documents, "the wheel wraps back to the first ring");
+        // Without sectors there is no such ring, even when it is asked for.
+        assert_eq!(one(SourceKind::Pdf, RingKind::Mine).kind, RingKind::Documents);
+    }
+
+    #[test]
     fn rings_step_forward_and_back_and_wrap_around() {
         assert_eq!(RingKind::Documents.step(1), RingKind::Images);
-        assert_eq!(RingKind::Files.step(1), RingKind::Documents);
-        assert_eq!(RingKind::Documents.step(-1), RingKind::Files);
+        assert_eq!(RingKind::Mine.step(1), RingKind::Documents);
+        assert_eq!(RingKind::Documents.step(-1), RingKind::Mine);
         assert_eq!(RingKind::Tools.step(-1), RingKind::Images);
-        assert_eq!(RingKind::Images.step(4), RingKind::Images);
+        assert_eq!(RingKind::Images.step(5), RingKind::Images);
     }
 
     #[test]

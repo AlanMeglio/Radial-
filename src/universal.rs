@@ -249,6 +249,18 @@ fn sort(
     Ok(Some(text))
 }
 
+/// Runs one of the user's own sectors (by its index in the sectors file) on the dropped files.
+pub fn run_custom(index: usize, files: Vec<PathBuf>, cfg: Config) {
+    let l = cfg.lang;
+    match crate::sectors::load().get(index) {
+        None => notice(fill(tr(l, "failed"), &[tr(l, "cus-gone")]), true),
+        Some(sector) => match crate::sectors::run(sector, &files) {
+            Ok(text) => notice(text, false),
+            Err(e) => notice(fill(tr(l, "failed"), &[&e]), true),
+        },
+    }
+}
+
 /// Puts back what the last rename or sort moved. Run from the tray menu.
 pub fn undo_last(l: Lang) {
     let Some(file) = rename::Undo::latest_file() else {

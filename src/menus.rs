@@ -5,7 +5,7 @@ use crate::config::{tr, Lang};
 use crate::engine::SourceKind;
 use crate::jobs::fill;
 use crate::render::{Icon, Scene, Slot};
-use crate::ring::{Menu, Op, Reason, RingKind, Switch};
+use crate::ring::{Item, Menu, Op, Reason, RingKind, Switch};
 
 /// What the hub and the pill say at one moment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,7 +23,13 @@ pub fn label(op: Op, lang: Lang) -> &'static str {
     match op {
         Op::Convert(t) => t.label(),
         Op::Action(a) => tr(lang, a.label_key()),
+        Op::Custom(_) => "",
     }
+}
+
+/// The text of a sector: the user's own words for a custom one, the translated name otherwise.
+pub fn item_label(item: &Item, lang: Lang) -> String {
+    item.custom.as_ref().map_or_else(|| label(item.op, lang).to_string(), |c| c.label.clone())
 }
 
 pub fn slots(menu: &Menu, lang: Lang) -> Vec<Slot> {
@@ -33,8 +39,12 @@ pub fn slots(menu: &Menu, lang: Lang) -> Vec<Slot> {
             let icon = match i.op {
                 Op::Convert(t) => Icon::for_label(t.label()),
                 Op::Action(a) => Icon::for_label(tr(Lang::En, a.label_key())),
+                Op::Custom(_) => match i.custom.as_ref().map(|c| c.kind) {
+                    Some(crate::sectors::Kind::OpenWith) => Icon::Reveal,
+                    _ => Icon::Folder,
+                },
             };
-            Slot { label: label(i.op, lang), enabled: i.enabled, icon }
+            Slot { label: item_label(i, lang), enabled: i.enabled, icon }
         })
         .collect()
 }
@@ -68,6 +78,7 @@ pub fn idle(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: Lan
     let (main, sub) = match (menu.kind, kind) {
         (RingKind::Tools, _) => (tr(lang, "tools-title").to_string(), size.to_string()),
         (RingKind::Files, _) => (tr(lang, "files-title").to_string(), size.to_string()),
+        (RingKind::Mine, _) => (tr(lang, "mine-title").to_string(), size.to_string()),
         (_, SourceKind::Image(f)) => (f.label().to_string(), size.to_string()),
         (_, SourceKind::Pdf) => (size.to_string(), "PDF".to_string()),
         (_, SourceKind::Docx) => (size.to_string(), "DOCX".to_string()),
@@ -91,7 +102,7 @@ pub fn hover(menu: &Menu, i: usize, switch: Switch, lang: Lang) -> Texts {
             accent: false,
         };
     };
-    let main = label(item.op, lang).to_string();
+    let main = item_label(item, lang);
     if !item.enabled {
         let why = item.reason.as_ref().map(|r| reason_text(r, lang)).unwrap_or_default();
         return Texts { main, sub: tr(lang, "unavailable").to_string(), caption: why, accent: false };
@@ -99,6 +110,7 @@ pub fn hover(menu: &Menu, i: usize, switch: Switch, lang: Lang) -> Texts {
     let sub = match item.op {
         Op::Convert(_) => tr(lang, "convert-to").to_string(),
         Op::Action(a) => tr(lang, a.hint_key()).to_string(),
+        Op::Custom(_) => item.custom.as_ref().map(|c| c.hint.clone()).unwrap_or_default(),
     };
     Texts { main, sub, caption: switch_hint(menu, switch, lang), accent: true }
 }
@@ -134,6 +146,7 @@ mod tests {
                 _ => Availability::Available,
             },
             source: &|_| Availability::Available,
+            custom: &[],
         }
     }
 
