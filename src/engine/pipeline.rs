@@ -56,6 +56,7 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
         SourceKind::Pdf => "PDF",
         SourceKind::Docx => "DOCX",
         SourceKind::Text => "text",
+        SourceKind::Other => "this kind of file",
     };
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
 }
@@ -412,6 +413,24 @@ mod tests {
             (SourceKind::Text, Target::Txt),
         ] {
             assert!(matches!(run(b"x", kind, to), Err(Error::Unsupported(_))), "{kind:?} -> {to:?}");
+        }
+    }
+
+    #[test]
+    fn supports_agrees_with_what_the_pipeline_really_converts() {
+        let samples: Vec<(SourceKind, Vec<u8>)> = vec![
+            (SourceKind::Pdf, pdfwrite::text_to_pdf("menu test")),
+            (img_kind(Fmt::Png), png(&DynamicImage::ImageRgba8(rgba(32, 24)))),
+            (SourceKind::Docx, docx::text_to_docx("menu test")),
+            (SourceKind::Text, b"menu test".to_vec()),
+            (SourceKind::Other, vec![0, 1]),
+        ];
+        let targets = [Target::Image(Fmt::Png), Target::Image(Fmt::Jpg), Target::Pdf, Target::Docx, Target::Txt];
+        for (kind, bytes) in samples {
+            for t in targets {
+                let unsupported = matches!(run(&bytes, kind, t), Err(Error::Unsupported(_)));
+                assert_eq!(!unsupported, super::super::kind::supports(kind, t), "{kind:?} -> {t:?}");
+            }
         }
     }
 

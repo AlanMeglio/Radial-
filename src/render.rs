@@ -1058,7 +1058,11 @@ impl Renderer {
                 if w > maxw {
                     px *= maxw / w;
                 }
-                let mc = if scene.main_accent { th.accent.mix(th.text, 0.15) } else { th.text };
+                let mc = if scene.main_accent && th.name != crate::theme::WINDOWS {
+                    th.accent.mix(th.text, 0.15)
+                } else {
+                    th.text
+                };
                 face.draw(pm, &main, g.cx, g.cy - 6.5 * k * look.scale, px, mc, fade, tr * px);
                 let spx = 9.5 * look.scale * k;
                 face.draw(pm, &scene.sub, g.cx, g.cy + 12.0 * k * look.scale, spx, th.text_dim, fade, 0.06 * spx);
@@ -1228,9 +1232,9 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
         source: &|_| Availability::Available,
     };
     let (src, ring) = match kind {
-        4 => (SourceKind::Pdf, RingKind::Convert),
+        4 => (SourceKind::Pdf, RingKind::Documents),
         7 => (SourceKind::Image(Fmt::Png), RingKind::Actions),
-        _ => (SourceKind::Image(Fmt::Png), RingKind::Convert),
+        _ => (SourceKind::Image(Fmt::Png), RingKind::Images),
     };
     let menu = build(src, ring, 1, &env);
     let mut sc = crate::menus::scene(src, &menu, "1.1 MB", Switch::Both, lang).settled();

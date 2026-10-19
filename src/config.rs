@@ -74,8 +74,8 @@ pub struct Config {
     pub onboarded: bool,
     /// How to flip between the conversion ring and the actions ring while dragging an image.
     pub ring_switch: Switch,
-    /// Which ring an image drag opens with.
-    pub start_ring: RingKind,
+    /// Which ring a drag opens with; `None` picks by file type.
+    pub start_ring: Option<RingKind>,
 }
 
 pub const SIZE_RANGE: (f32, f32) = (0.7, 1.5);
@@ -90,7 +90,7 @@ impl Default for Config {
     fn default() -> Config {
         let t = Theme::base();
         Config {
-            theme: "glass".into(),
+            theme: crate::theme::WINDOWS.into(),
             accent: None,
             size: 1.0,
             ring: t.ring,
@@ -108,7 +108,7 @@ impl Default for Config {
             lang: Lang::En,
             onboarded: false,
             ring_switch: Switch::Both,
-            start_ring: RingKind::Convert,
+            start_ring: None,
         }
     }
 }
@@ -122,7 +122,15 @@ const NOTIFIES: [(&str, Notify); 4] =
     [("off", Notify::Off), ("balloon", Notify::Balloon), ("sound", Notify::Sound), ("both", Notify::Both)];
 const LANGS: [(&str, Lang); 2] = [("en", Lang::En), ("es", Lang::Es)];
 const SWITCHES: [(&str, Switch); 3] = [("both", Switch::Both), ("tab", Switch::Tab), ("hub", Switch::Hub)];
-const RINGS: [(&str, RingKind); 2] = [("convert", RingKind::Convert), ("actions", RingKind::Actions)];
+/// `None` is "match the file" (images open on the formats, everything else on documents). `convert` is the
+/// spelling from before there were three rings.
+const RINGS: [(&str, Option<RingKind>); 5] = [
+    ("auto", None),
+    ("documents", Some(RingKind::Documents)),
+    ("images", Some(RingKind::Images)),
+    ("actions", Some(RingKind::Actions)),
+    ("convert", None),
+];
 
 fn word<T: Copy>(table: &[(&'static str, T)], v: &str) -> Option<T> {
     table.iter().find(|(k, _)| *k == v.to_ascii_lowercase()).map(|(_, t)| *t)
@@ -429,13 +437,13 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("how3", "Drop it on a sector", "Suéltalo sobre un sector"),
     ("ms", "ms", "ms"),
     ("off", "Off", "Apagado"),
-    ("act-compress", "COMPRESS", "COMPRIMIR"),
-    ("act-metadata", "METADATA", "METADATOS"),
-    ("act-edit", "EDIT", "EDITAR"),
-    ("act-annotate", "ANNOTATE", "ANOTAR"),
-    ("act-addbg", "ADD BG", "FONDO"),
-    ("act-crop", "CROP", "RECORTAR"),
-    ("act-redact", "REDACT", "TACHAR"),
+    ("act-compress", "Compress", "Comprimir"),
+    ("act-metadata", "Metadata", "Metadatos"),
+    ("act-edit", "Edit", "Editar"),
+    ("act-annotate", "Annotate", "Anotar"),
+    ("act-addbg", "Add BG", "Fondo"),
+    ("act-crop", "Crop", "Recortar"),
+    ("act-redact", "Redact", "Tachar"),
     ("act-compress-hint", "Smaller file", "Más liviano"),
     ("act-metadata-hint", "Strip EXIF", "Quita EXIF"),
     ("act-edit-hint", "Rotate, tone", "Girar, tono"),
@@ -447,11 +455,14 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("unavailable", "Unavailable", "No disponible"),
     ("actions-title", "Actions", "Acciones"),
     ("files-n", "{} files", "{} archivos"),
-    ("sw-both", "Tab or hub", "Tab o centro"),
-    ("sw-tab", "Tab", "Tab"),
-    ("sw-hub", "Hub", "Centro"),
-    ("go-actions", "{}: actions", "{}: acciones"),
-    ("go-convert", "{}: convert", "{}: convertir"),
+    ("sw-both", "Wheel, Tab or hub", "Rueda, Tab o centro"),
+    ("sw-tab", "Wheel or Tab", "Rueda o Tab"),
+    ("sw-hub", "Wheel or hub", "Rueda o centro"),
+    ("go-next", "{}: {}", "{}: {}"),
+    ("ring-documents", "documents", "documentos"),
+    ("ring-name-actions", "actions", "acciones"),
+    ("ring-images", "images", "imágenes"),
+    ("why-no-path", "Can't convert this file to that format", "Este archivo no se puede convertir a ese formato"),
     ("why-one-file", "Drop a single image to use this", "Suelta una sola imagen para usar esto"),
     ("why-formats", "Works on {} only", "Solo funciona con {}"),
     ("compressed", "Compressed {}: {} to {} ({})", "Comprimido {}: {} a {} ({})"),
@@ -465,9 +476,11 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
         "Guardado {} sin datos de ubicación (quitadas {} entradas, {})",
     ),
     ("ring-switch", "Switch rings with", "Cambiar de anillo con"),
-    ("start-ring", "Image menu opens on", "El menú de imágenes abre en"),
-    ("ring-convert", "Convert", "Convertir"),
+    ("start-ring", "Menu opens on", "El menú abre en"),
+    ("ring-auto", "Auto", "Auto"),
     ("ring-actions", "Actions", "Acciones"),
+    ("ring-pick-documents", "Documents", "Documentos"),
+    ("ring-pick-images", "Images", "Imágenes"),
     ("sw-label-both", "Tab + hub", "Tab + centro"),
     ("dlg-crop", "Crop Image", "Recortar imagen"),
     ("dlg-bg", "Add BG", "Agregar fondo"),
@@ -574,7 +587,7 @@ mod tests {
             lang: Lang::Es,
             onboarded: true,
             ring_switch: Switch::Hub,
-            start_ring: RingKind::Actions,
+            start_ring: Some(RingKind::Actions),
         };
         let (back, warns) = Config::parse(&c.to_text());
         assert_eq!(back, c);
@@ -582,22 +595,22 @@ mod tests {
     }
 
     #[test]
-    fn ring_settings_default_to_tab_or_hub_and_the_conversion_ring() {
+    fn ring_settings_default_to_tab_or_hub_and_the_ring_that_matches_the_file() {
         let c = Config::default();
-        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, RingKind::Convert));
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, None));
         let (c, w) = Config::parse(
             "ring_switch = tab
 start_ring = actions
 ",
         );
-        assert_eq!((c.ring_switch, c.start_ring), (Switch::Tab, RingKind::Actions));
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Tab, Some(RingKind::Actions)));
         assert!(w.is_empty());
         let (c, w) = Config::parse(
             "ring_switch = sideways
 start_ring = third
 ",
         );
-        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, RingKind::Convert));
+        assert_eq!((c.ring_switch, c.start_ring), (Switch::Both, None));
         assert_eq!(w.len(), 2);
     }
 

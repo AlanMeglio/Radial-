@@ -5,12 +5,15 @@
 #   3. PNG -> COMPRESS, switching to the actions ring with Tab
 #   4. PNG -> COMPRESS, switching to the actions ring by resting on the hub
 #   5. PNG -> CROP: the dialog opens in front, Enter applies it, the window closes and the cropped copy exists
+#   6. PNG -> COMPRESS, reaching the actions ring with the mouse wheel
+#   7. PDF -> PNG, reaching the image ring (menu 2) of a document with the mouse wheel
+#   8. a file the engine does not read still opens the menu, and dropping on a sector does nothing
 # Run after `cargo build --release` and do not touch the mouse meanwhile.
 # Usage: powershell -File tests\e2e.ps1 [-Exe path] [-Out dir]   (exit code 1 when a check fails)
 param(
     [string]$Exe = $(if ($env:RADIAL_EXE) { $env:RADIAL_EXE } else { Join-Path $PSScriptRoot "..\target\release\radial.exe" }),
     [string]$Out = (Join-Path $env:TEMP "radial-e2e"),
-    [int[]]$Scenarios = @(1, 2, 3, 4, 5)
+    [int[]]$Scenarios = @(1, 2, 3, 4, 5, 6, 7, 8)
 )
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -33,6 +36,8 @@ public class N {
 $sb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $scale = [N]::GetDpiForSystem() / 96.0
 function MoveTo($x, $y) { [N]::mouse_event(0x8001, [int]($x * 65535 / ($sb.Width - 1)), [int]($y * 65535 / ($sb.Height - 1)), 0, [UIntPtr]::Zero) }
+# One notch is 120; positive scrolls up (previous ring), negative down (next ring).
+function Wheel($notches) { [N]::mouse_event(0x0800, 0, 0, [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]($notches * 120)), 0), [UIntPtr]::Zero) }
 function Key($vk, $up = $false) { [N]::keybd_event($vk, 0, $(if ($up) { 2 } else { 0 }), [UIntPtr]::Zero) }
 function Snap($path, $l, $t, $w, $h) {
     $b = New-Object System.Drawing.Bitmap $w, $h; $g = [System.Drawing.Graphics]::FromImage($b)
@@ -56,8 +61,10 @@ function NewPng($name, $size) {
     }
     $bmp.Save("$Out\$name"); $g.Dispose(); $bmp.Dispose()
 }
-NewPng "x.png" 64; NewPng "tab.png" 800; NewPng "hub.png" 800; NewPng "crop.png" 400
+NewPng "x.png" 64; NewPng "wheel.png" 800; NewPng "tab.png" 800; NewPng "hub.png" 800; NewPng "crop.png" 400
 Copy-Item (Join-Path $PSScriptRoot "fixtures\hello.pdf") "$Out\hello.pdf"
+Copy-Item (Join-Path $PSScriptRoot "fixtures\hello.pdf") "$Out\wheelpdf.pdf"
+[System.IO.File]::WriteAllBytes("$Out\blob.xyz", [byte[]](0, 1, 2, 3, 250, 251, 252, 253))
 
 $proc = Start-Process $exePath -PassThru
 Start-Sleep 1.5
@@ -70,10 +77,10 @@ function Check($name, $ok, $detail = "") {
 # Drags $File out of a form, opens the menu with Shift, optionally flips the ring ($Tab or $Hub), moves to the
 # sector at $Angle degrees (clockwise from up) and releases. $Shot is a screenshot of the menu before the drop.
 # $Then runs on the timer once the drop is done (dialog checks).
-function Invoke-Drag($File, $Angle, $Shot, [switch]$Tab, [switch]$Hub, [scriptblock]$Then = $null) {
+function Invoke-Drag($File, $Angle, $Shot, [switch]$Tab, [switch]$Hub, [int]$Wheel = 0, [scriptblock]$Then = $null) {
     # Handlers run later on the form's timer; they read script-scope variables, not this function's locals.
     $script:log = @(); $script:n = 0; $script:cx = 0; $script:cy = 0
-    $script:File = $File; $script:Shot = $Shot; $script:Tab = [bool]$Tab; $script:Hub = [bool]$Hub; $script:Then = $Then
+    $script:File = $File; $script:Shot = $Shot; $script:Tab = [bool]$Tab; $script:Hub = [bool]$Hub; $script:Wheel = $Wheel; $script:Then = $Then
     $script:rad = 115 * $scale
     $script:a = $Angle * [math]::PI / 180
     $script:snap = [int](540 * $scale)
@@ -101,11 +108,11 @@ function Invoke-Drag($File, $Angle, $Shot, [switch]$Tab, [switch]$Hub, [scriptbl
                 $h = [N]::FindWindow("RadialOverlay", "RadialOverlay"); $r = New-Object N+RECT; [N]::GetWindowRect($h, [ref]$r) | Out-Null
                 $script:log += "overlay visible=$([N]::IsWindowVisible($h))"
                 $script:cx = ($r.L + $r.R) / 2; $script:cy = ($r.T + $r.B) / 2
-                if ($script:Tab) { MoveTo ($script:cx + 60 * $scale) $script:cy }
+                if ($script:Tab -or $script:Wheel -ne 0) { MoveTo ($script:cx + 60 * $scale) $script:cy }
                 elseif ($script:Hub) { MoveTo ($script:cx + 60 * $scale) $script:cy }
                 else { MoveTo ($script:cx + $script:rad * [math]::Sin($script:a)) ($script:cy - $script:rad * [math]::Cos($script:a)) }
             }
-            18 { if ($script:Tab) { Key 0x09; Key 0x09 $true } elseif ($script:Hub) { MoveTo $script:cx $script:cy } }
+            18 { if ($script:Tab) { Key 0x09; Key 0x09 $true } elseif ($script:Wheel -ne 0) { Wheel $script:Wheel } elseif ($script:Hub) { MoveTo $script:cx $script:cy } }
             # The hub dwell needs about half a second of rest; the screenshot is taken after the ring flipped.
             27 {
                 $h = [N]::FindWindow("RadialOverlay", "RadialOverlay"); $r = New-Object N+RECT; [N]::GetWindowRect($h, [ref]$r) | Out-Null
@@ -176,6 +183,26 @@ if ($Scenarios -contains 5) {
     Check "CROP: it came to the front" ($log -match "foreground=True")
     Check "CROP: Enter applied and the cropped copy exists" (Test-Path "$Out\crop (cropped).png")
     Check "CROP: the dialog window is gone" ([N]::FindWindow("RadialDialog", [NullString]::Value) -eq [IntPtr]::Zero)
+}
+
+if ($Scenarios -contains 6) {
+    # 6. one notch down from the image ring is the actions ring: COMPRESS is the top sector
+    $log = Invoke-Drag "$Out\wheel.png" 0 "s6" -Wheel -1
+    Check "actions ring (wheel): COMPRESS wrote a smaller copy" (Test-Path "$Out\wheel (compressed).png")
+}
+
+if ($Scenarios -contains 7) {
+    # 7. a PDF opens on the document ring; one notch down is the image ring, whose top sector is PNG
+    $log = Invoke-Drag "$Out\wheelpdf.pdf" 0 "s7" -Wheel -1
+    Check "image ring of a PDF (wheel): a PNG was written" ($null -ne (Get-ChildItem $Out -Filter "wheelpdf*.png" -ErrorAction SilentlyContinue))
+}
+
+if ($Scenarios -contains 8) {
+    # 8. an unknown file still gets the menu; every sector is greyed out so nothing is written
+    $files = { @(Get-ChildItem $Out | Where-Object { $_.Name -notmatch '^s\d-' }).Count }; $before = & $files
+    $log = Invoke-Drag "$Out\blob.xyz" 0 "s8"
+    Check "unknown file: the overlay opened" ($log -match "overlay visible=True")
+    Check "unknown file: nothing was written" ((& $files) -eq $before) "files before $before"
 }
 
 Get-ChildItem $Out | ForEach-Object { "file: $($_.Name) $($_.Length)" }

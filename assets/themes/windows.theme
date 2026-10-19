@@ -1,0 +1,41 @@
+# Windows 11: flat acrylic sectors, thin light edge, no glow, Segoe UI Variable, sentence case, quick and calm motion.
+# This is the dark variant; at run time the preset follows the system (light or dark apps mode) and uses the
+# accent colour chosen in Windows Settings (see `windows_variant` in src/theme.rs).
+name = windows
+label = Windows 11
+accent = #0078d4
+accent2 = #0078d4
+text = #ffffff
+text_dim = #ffffffb3
+glass_top = #3a3a3ac4
+glass_bottom = #2b2b2bd0
+hub = #202020e6
+rim = #ffffff22
+highlight = #ffffff26
+shadow = #00000068
+hover_fill = #0078d4eb
+hover_text = #ffffff
+sheen = 0.0
+glow = 0.0
+shadow_spread = 26
+shadow_dy = 8
+blur = 30
+saturation = 1.2
+orbit = 0.0
+ticks = false
+rim_tint = 0.0
+inset = 1.0
+ring = 90
+gap = 4
+corner = 8
+font = variable
+weight = 450
+tracking = 0.0
+caps = false
+stiffness = 380
+damping = 0.95
+stagger = 0.012
+hover_lift = 2
+hover_grow = 2
+preview_a = #123a78
+preview_b = #4a9be0

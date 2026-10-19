@@ -322,7 +322,7 @@ impl CropDialog {
         let label = format!("{} x {}", self.rect.w, self.rect.h);
         let w = pen.width(&label, 11.5) + 18.0;
         let chip = [(l + 8.0).min(img[0] + img[2] - w), (t + 8.0).min(img[1] + img[3] - 26.0), w, 22.0];
-        pen.fill(chip, 11.0, Rgba(10, 12, 20, 200));
+        pen.fill(chip, 4.0, Rgba(0, 0, 0, 190));
         pen.text_c(&label, chip[0] + w / 2.0, chip[1] + 11.5, 11.5, white);
     }
 }

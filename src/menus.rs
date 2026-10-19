@@ -44,21 +44,18 @@ pub fn reason_text(r: &Reason, lang: Lang) -> String {
         Reason::Engine(why) => why.clone(),
         Reason::OneFile => tr(lang, "why-one-file").to_string(),
         Reason::Formats(list) => fill(tr(lang, "why-formats"), &[list]),
+        Reason::NoPath => tr(lang, "why-no-path").to_string(),
     }
 }
 
-/// "Tab or hub: actions" - how to reach the other ring from this one. Empty when there is no other ring.
+/// "Wheel, Tab or hub: images" - how to reach the next ring and what it is.
 pub fn switch_hint(menu: &Menu, switch: Switch, lang: Lang) -> String {
-    if !menu.switchable {
-        return String::new();
-    }
     let how = match switch {
         Switch::Both => tr(lang, "sw-both"),
         Switch::Tab => tr(lang, "sw-tab"),
         Switch::Hub => tr(lang, "sw-hub"),
     };
-    let to = if menu.kind == RingKind::Convert { "go-actions" } else { "go-convert" };
-    fill(tr(lang, to), &[how])
+    fill(tr(lang, "go-next"), &[how, tr(lang, menu.kind.step(1).name_key())])
 }
 
 /// Hub texts while nothing is hovered. `size` is the human readable size of the file (or the file count).
@@ -70,6 +67,7 @@ pub fn idle(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: Lan
         (_, SourceKind::Pdf) => (size.to_string(), "PDF".to_string()),
         (_, SourceKind::Docx) => (size.to_string(), "DOCX".to_string()),
         (_, SourceKind::Text) => (size.to_string(), "TXT".to_string()),
+        (_, SourceKind::Other) => (size.to_string(), "FILE".to_string()),
     };
     Texts { main, sub, caption, accent: false }
 }
@@ -101,7 +99,7 @@ pub fn scene(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: La
     let t = idle(kind, menu, size, switch, lang);
     let mut sc = Scene::new(slots(menu, lang), t.main, t.sub);
     sc.caption = t.caption;
-    sc.pager = menu.switchable.then_some((if menu.kind == RingKind::Convert { 0 } else { 1 }, 2));
+    sc.pager = Some((menu.kind.index(), RingKind::ALL.len()));
     sc
 }
 
@@ -137,8 +135,8 @@ mod tests {
     #[test]
     fn labels_are_translated_for_actions_only() {
         assert_eq!(label(Op::Convert(Target::Pdf), Lang::Es), "PDF");
-        assert_eq!(label(Op::Action(ActionKind::Crop), Lang::En), "CROP");
-        assert_eq!(label(Op::Action(ActionKind::Crop), Lang::Es), "RECORTAR");
+        assert_eq!(label(Op::Action(ActionKind::Crop), Lang::En), "Crop");
+        assert_eq!(label(Op::Action(ActionKind::Crop), Lang::Es), "Recortar");
     }
 
     #[test]
@@ -154,18 +152,24 @@ mod tests {
 
     #[test]
     fn idle_hub_shows_format_and_size_for_images_and_size_for_documents() {
-        let m = png_menu(RingKind::Convert);
+        let m = png_menu(RingKind::Images);
         let t = idle(SourceKind::Image(Fmt::Png), &m, "1.1 MB", Switch::Both, Lang::En);
         assert_eq!((t.main.as_str(), t.sub.as_str()), ("PNG", "1.1 MB"));
-        assert_eq!(t.caption, "Tab or hub: actions");
-        let pdf = build(SourceKind::Pdf, RingKind::Convert, 1, &env());
+        assert_eq!(t.caption, "Wheel, Tab or hub: actions");
+        let pdf = build(SourceKind::Pdf, RingKind::Documents, 1, &env());
         let t = idle(SourceKind::Pdf, &pdf, "1.1 MB", Switch::Both, Lang::En);
-        assert_eq!((t.main.as_str(), t.sub.as_str(), t.caption.as_str()), ("1.1 MB", "PDF", ""));
+        assert_eq!(
+            (t.main.as_str(), t.sub.as_str(), t.caption.as_str()),
+            ("1.1 MB", "PDF", "Wheel, Tab or hub: images")
+        );
+        let other = build(SourceKind::Other, RingKind::Documents, 1, &env());
+        let t = idle(SourceKind::Other, &other, "3 KB", Switch::Both, Lang::En);
+        assert_eq!((t.main.as_str(), t.sub.as_str()), ("3 KB", "FILE"));
     }
 
     #[test]
     fn hovering_a_working_sector_names_it_and_a_greyed_one_explains_itself() {
-        let m = png_menu(RingKind::Convert);
+        let m = png_menu(RingKind::Images);
         let webp = hover(&m, 1, Switch::Both, Lang::En);
         assert_eq!((webp.main.as_str(), webp.sub.as_str(), webp.accent), ("WEBP", "Convert to", true));
         let avif = hover(&m, 4, Switch::Both, Lang::En);
@@ -177,18 +181,16 @@ mod tests {
     fn action_hover_describes_the_action_in_the_active_language() {
         let m = png_menu(RingKind::Actions);
         assert_eq!(hover(&m, 6, Switch::Both, Lang::En).sub, "Black out");
-        assert_eq!(hover(&m, 6, Switch::Both, Lang::Es).main, "TACHAR");
+        assert_eq!(hover(&m, 6, Switch::Both, Lang::Es).main, "Tachar");
     }
 
     #[test]
     fn the_switch_hint_names_the_gesture_and_the_destination() {
-        let convert = png_menu(RingKind::Convert);
+        let images = png_menu(RingKind::Images);
         let actions = png_menu(RingKind::Actions);
-        assert_eq!(switch_hint(&convert, Switch::Tab, Lang::En), "Tab: actions");
-        assert_eq!(switch_hint(&actions, Switch::Hub, Lang::En), "Hub: convert");
-        assert_eq!(switch_hint(&convert, Switch::Both, Lang::Es), "Tab o centro: acciones");
-        let pdf = build(SourceKind::Pdf, RingKind::Convert, 1, &env());
-        assert_eq!(switch_hint(&pdf, Switch::Both, Lang::En), "");
+        assert_eq!(switch_hint(&images, Switch::Tab, Lang::En), "Wheel or Tab: actions");
+        assert_eq!(switch_hint(&actions, Switch::Hub, Lang::En), "Wheel or hub: documents");
+        assert_eq!(switch_hint(&images, Switch::Both, Lang::Es), "Rueda, Tab o centro: acciones");
     }
 
     #[test]
@@ -204,9 +206,9 @@ mod tests {
         let m = png_menu(RingKind::Actions);
         let sc = scene(SourceKind::Image(Fmt::Png), &m, "2 KB", Switch::Both, Lang::En);
         assert_eq!(sc.slots.len(), 7);
-        assert_eq!(sc.pager, Some((1, 2)));
+        assert_eq!(sc.pager, Some((2, 3)));
         assert_eq!((sc.main.as_str(), sc.sub.as_str()), ("Actions", "2 KB"));
-        let doc = build(SourceKind::Docx, RingKind::Convert, 1, &env());
-        assert_eq!(scene(SourceKind::Docx, &doc, "9 KB", Switch::Both, Lang::En).pager, None);
+        let doc = build(SourceKind::Docx, RingKind::Documents, 1, &env());
+        assert_eq!(scene(SourceKind::Docx, &doc, "9 KB", Switch::Both, Lang::En).pager, Some((0, 3)));
     }
 }

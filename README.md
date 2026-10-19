@@ -12,31 +12,38 @@ Windows 11: one 2.7 MB executable, no runtime, zero CPU while idle.
 
 ## What it does
 
-The menu depends on what you drag. Radial looks inside the file (not just at its name) and builds the ring for it.
+Every file you drag gets the same **three rings**. Radial looks inside the file (not just at its name) to decide which
+one opens first and which sectors work.
 
-| You drag | Sectors, clockwise from the top |
-| --- | --- |
-| **An image** (PNG, JPG, WEBP, GIF, TIFF, BMP, HEIC, AVIF) | PNG, WEBP, HEIC, TIFF, AVIF, BMP, PDF, DOCX. The image's own format is replaced by JPG, so there are always eight. |
-| **A PDF** | DOCX, JPG, PNG, TXT. The hub shows the file size, e.g. `1.1 MB`. |
-| **A DOCX** | PDF, TXT |
-| **A text file** (txt, md, log, csv, rtf) | PDF, DOCX |
+| Ring | Sectors, clockwise from the top | Opens first for |
+| --- | --- | --- |
+| **1. Documents** | DOCX, JPG, PNG, TXT. The file's own format is replaced by PDF. | PDF, DOCX, text files, anything else |
+| **2. Images** | PNG, WEBP, HEIC, TIFF, AVIF, BMP, PDF, DOCX. The file's own format is replaced by JPG, so there are always eight. | images (PNG, JPG, WEBP, GIF, TIFF, BMP, HEIC, AVIF) |
+| **3. Actions** | COMPRESS, METADATA, EDIT, ANNOTATE, ADD BG, CROP, REDACT | (reached with the wheel, Tab or the hub) |
+
+**Turn the mouse wheel while you drag** to move between the rings (down is next, up is previous; Tab and resting on
+the hub also go to the next one). The pill under the ring shows three dots, the current ring, and what comes next.
+The hub shows the file size, e.g. `1.1 MB`, or the format.
 
 Results are written next to the original (or into your output folder) and **never overwrite anything** unless you
 choose "Overwrite": `photo.png` becomes `photo (1).png`. Dragging several files converts all of them.
 
 ### Sectors that cannot work are shown, not hidden
 
-A sector that this machine cannot do is greyed out, and hovering it says why in the pill under the ring, for example
-`AVIF encoding needs ...` when Windows has no AV1 encoder, or `Works on JPG, PNG, WEBP only` for COMPRESS on a BMP.
+A sector that cannot work for this file or this machine is greyed out, and hovering it says why in the pill under the
+ring, for example `AVIF encoding needs ...` when Windows has no AV1 encoder, `Works on JPG, PNG, WEBP only` for
+COMPRESS on a BMP, `Works on images only` for the actions of a PDF, or `Can't convert this file to that format` for a
+picture to TXT. A file Radial does not read (a ZIP, a video...) still opens all three rings, with every sector greyed
+out, so the menu never just fails to appear.
 Nothing is faked: `radial --formats` prints exactly what your machine can read and write.
 
 <p align="center"><img src="docs/ring-unavailable.png" width="46%" alt="AVIF greyed out with the reason in the pill under the ring"></p>
 
 ### The actions ring
 
-Images have a second ring with seven actions. While dragging, press **Tab**, or move off the centre hub and rest the
-pointer back on it for half a second (a ring fills around the hub while you wait), to flip between the two rings. The
-pill under the ring says which; the gestures can be chosen in Settings, and so can the ring an image opens on.
+The third ring has seven actions and works on images. Besides the wheel, press **Tab**, or move off the centre hub
+and rest the pointer back on it for half a second (a ring fills around the hub while you wait), to go to the next
+ring. The wheel always works; Settings picks whether Tab, the hub or both also do, and which ring a drag opens on.
 
 | Sector | What happens |
 | --- | --- |
@@ -66,7 +73,8 @@ heavy work (decoding, previews, saving) runs on worker threads, so a large pictu
 - **Real frosted glass.** The area behind the menu is captured when it opens, blurred, saturated and tinted, so the
   sectors look like glass over whatever is on your screen. Layered soft shadows, rim light, vector icons (nothing
   bundled, no emoji) and spring-driven motion with a staggered entrance, hover lift and a drop-confirmation pulse.
-- **Seven themes, and yours.** Obsidian Glass, Frosted Paper, Mono Ink, Aurora, Sunset, Terminal Neon and Noir Gold.
+- **Looks like Windows.** The default theme, "Windows 11", is flat acrylic with the system accent colour and follows light or dark mode; the dialogs and Settings use the same neutrals, 4 px controls and Segoe UI.
+- **Eight themes, and yours.** Windows 11, Obsidian Glass, Frosted Paper, Mono Ink, Aurora, Sunset, Terminal Neon and Noir Gold.
   A theme is a plain text file (see [Themes](#themes)).
 - **A configurator with a live preview.** The first run starts a three step onboarding (pick a look, pick a key,
   done); afterwards it is one click away in the tray menu. Everything is adjustable: accent colour, size, ring
@@ -119,8 +127,8 @@ AVIF encoder.
 
 1. Run `radial.exe`. On first run the onboarding opens.
 2. Start dragging a file from Explorer or the desktop.
-3. Hold the trigger key (Shift by default), move onto a sector and let go. Press **Tab** (or rest on the centre) to
-   reach the actions ring for an image.
+3. Hold the trigger key (Shift by default), move onto a sector and let go. Turn the **mouse wheel** (or press
+   Tab, or rest on the centre) to move between the three rings.
 
 Tray menu: **Settings...**, **Pause / Resume**, **Start with Windows**, **About**, **Quit**. Double click the tray
 icon to open the settings.
@@ -133,7 +141,7 @@ Command line (all optional, for scripting, documentation and development):
 | `--formats` | Prints what this machine can read and write |
 | `--open crop\|bg\|edit\|annotate\|redact <image>` | Opens one action dialog without the tray; the process ends when it closes |
 | `--autostart on` / `--autostart off` | Adds or removes the start-with-Windows entry (`HKCU\...\Run`) and exits |
-| `--preview out.png [--theme glass] [--hover 2] [--menu 8\|4\|7] [--accent #ff8800] [--dpi 2]` | Renders a menu over a sample wallpaper: 8 is the image ring, 4 the PDF ring, 7 the actions ring |
+| `--preview out.png [--theme glass] [--hover 2] [--menu 8\|4\|7] [--accent #ff8800] [--dpi 2]` | Renders a menu over a sample wallpaper: 8 is the image ring, 4 the document ring, 7 the actions ring |
 | `--sheet out.png` | Renders every theme into one contact sheet (this is how `docs/themes.png` is made) |
 | `--settings out.png [--tab 1] [--step 0..2] [--lang es] [--light] [--menu 8\|4\|7]` | Renders the configurator window to a PNG |
 | `--dialog crop\|bg\|edit\|annotate\|redact --out out.png [--image f] [--script s] [--lang es] [--light] [--dpi 2]` | Renders a dialog to a PNG; `--script "click:102;drag:200,300,420,230;text:Hi;key:13"` drives it first (this is how the `docs/dialog-*.png` are made) |
@@ -156,8 +164,8 @@ keys and bad values are ignored, numbers are clamped).
 | `font` | `theme`, `variable`, `bahnschrift`, `consolas`, `georgia` | `theme` |
 | `trigger` | `shift`, `ctrl`, `alt`, `none` | `shift` |
 | `delay_ms` | 0 to 800, how long the drag is held before the menu opens | `0` |
-| `ring_switch` | `both` (Tab or resting on the hub), `tab`, `hub` | `both` |
-| `start_ring` | `convert` or `actions`: the ring an image drag opens on | `convert` |
+| `ring_switch` | `both` (Tab or resting on the hub), `tab`, `hub`; the wheel always works | `both` |
+| `start_ring` | `auto` (images on the image ring, the rest on documents), `documents`, `images` or `actions`: the ring a drag opens on | `auto` |
 | `out_dir` | empty (next to the source) or a folder | empty |
 | `collision` | `rename`, `overwrite`, `skip` | `rename` |
 | `notify` | `off`, `balloon`, `sound`, `both` | `balloon` |
@@ -166,7 +174,7 @@ keys and bad values are ignored, numbers are clamped).
 
 ## Themes
 
-A theme is a `key = value` file; every key is optional and defaults to Obsidian Glass. The built-in ones live in
+A theme is a `key = value` file; every key is optional and defaults to the Obsidian Glass values. The built-in ones live in
 [`assets/themes`](assets/themes) and are embedded in the binary. Your own go in `%APPDATA%\radial\themes\*.theme` and
 show up in the configurator next to the built-in ones.
 
@@ -194,8 +202,8 @@ the app, drop the file into `assets/themes` and list it in `BUILTIN`.
 ## How it works
 
 - Low-level mouse and keyboard hooks feed a small state machine (`src/trigger.rs`) that spots "left button dragged,
-  trigger key held". Nothing else runs while idle. While a menu is up the keyboard hook also turns Tab into the ring
-  switch.
+  trigger key held". Nothing else runs while idle. While a menu is up the keyboard hook also turns Tab, and the mouse
+  hook the wheel, into the ring switch.
 - The menu is a topmost, non-activating layered window with a per-pixel-alpha bitmap and an OLE drop target, so it
   receives the drop like any other window. Its buffers only exist while the menu is on screen. The whole interactive
   disc stays faintly opaque so a drag never falls through the window while the sectors animate.

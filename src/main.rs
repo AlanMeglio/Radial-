@@ -221,6 +221,15 @@ unsafe fn root_class_at(p: POINT) -> String {
 unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && !PAUSED.load(Relaxed) {
         let ms = &*(lp as *const MSLLHOOKSTRUCT);
+        // While a menu is up the wheel walks through the rings (up = previous). It is swallowed so the window under
+        // the pointer does not scroll while the user is choosing.
+        if wp as u32 == WM_MOUSEWHEEL && overlay::wheel_wanted() {
+            let notches = (ms.mouseData >> 16) as i16;
+            if notches != 0 {
+                PostMessageW(overlay_hwnd(), overlay::WM_RING_STEP, (notches < 0) as usize, 0);
+            }
+            return 1;
+        }
         let p = Pt { x: ms.pt.x, y: ms.pt.y };
         let mut up = false;
         let act = TRACKER.with(|t| {
@@ -256,7 +265,7 @@ unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
         if k.vkCode == VK_TAB as u32 && overlay::tab_wanted() {
             let down = matches!(wp as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             if down && !TAB_DOWN.swap(true, Relaxed) {
-                PostMessageW(overlay_hwnd(), overlay::WM_RING_TOGGLE, 0, 0);
+                PostMessageW(overlay_hwnd(), overlay::WM_RING_STEP, 1, 0);
             } else if !down {
                 TAB_DOWN.store(false, Relaxed);
             }

@@ -33,8 +33,8 @@ pub const WM_SHOW: u32 = WM_APP + 10; // lparam: x | y << 16 (signed 16 bit each
 pub const WM_HIDE: u32 = WM_APP + 11;
 pub const WM_HIDE_SOON: u32 = WM_APP + 12;
 pub const WM_DONE: u32 = WM_APP + 13; // lparam: Box<(String, bool)> with the result text and a failure flag
-/// Posted by the keyboard hook when Tab is pressed during a drag: flips between the two rings.
-pub const WM_RING_TOGGLE: u32 = WM_APP + 14;
+/// Posted by the hooks (Tab, mouse wheel) during a drag: moves to another ring. wparam 1 is next, 0 is previous.
+pub const WM_RING_STEP: u32 = WM_APP + 14;
 /// wparam: index into `ActionKind::ALL`; lparam: Box<PathBuf>. Opens an action dialog once the drop has returned.
 pub const WM_OPEN_DIALOG: u32 = WM_APP + 15;
 /// Test knob: wparam is an index into `ActionKind::ALL`; opens that dialog on the file named by `RADIAL_OPEN_FILE`.
@@ -54,6 +54,8 @@ const NONE: u32 = 0;
 static HWND_MAIN: AtomicUsize = AtomicUsize::new(0);
 /// True while a menu is up and Tab should flip rings; read by the keyboard hook, which must not touch app state.
 static TAB_SWITCH: AtomicBool = AtomicBool::new(false);
+/// True while a menu is up: the mouse wheel walks through the rings. Read by the mouse hook.
+static WHEEL_SWITCH: AtomicBool = AtomicBool::new(false);
 
 pub fn set_hwnd(h: HWND) {
     HWND_MAIN.store(h as usize, Relaxed);
@@ -63,9 +65,14 @@ pub fn hwnd() -> HWND {
     HWND_MAIN.load(Relaxed) as HWND
 }
 
-/// Should the keyboard hook swallow Tab and flip rings?
+/// Should the keyboard hook swallow Tab and change ring?
 pub fn tab_wanted() -> bool {
     TAB_SWITCH.load(Relaxed)
+}
+
+/// Should the mouse hook swallow the wheel and change ring?
+pub fn wheel_wanted() -> bool {
+    WHEEL_SWITCH.load(Relaxed)
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -254,6 +261,7 @@ pub unsafe fn show(x: i32, y: i32) {
 
 unsafe fn hide_now() {
     TAB_SWITCH.store(false, Relaxed);
+    WHEEL_SWITCH.store(false, Relaxed);
     let h = hwnd();
     KillTimer(h, TIMER_FRAME);
     KillTimer(h, TIMER_HIDE);
@@ -268,6 +276,7 @@ unsafe fn hide_now() {
 
 unsafe fn begin_close() {
     TAB_SWITCH.store(false, Relaxed);
+    WHEEL_SWITCH.store(false, Relaxed);
     let pending = with(|o| {
         if o.phase == Phase::Pending {
             return true;
@@ -417,14 +426,16 @@ pub unsafe fn handle(msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
             cancel_delay();
             SetTimer(hwnd(), TIMER_HIDE, 400, None);
         }
-        WM_RING_TOGGLE => {
-            let flipped = with(|o| {
-                o.phase == Phase::Open && o.menu.as_ref().is_some_and(|m| m.switchable) && {
-                    toggle_ring(o);
-                    true
+        WM_RING_STEP => {
+            let delta = if wp == 0 { -1 } else { 1 };
+            let moved = with(|o| {
+                let open = o.phase == Phase::Open;
+                if open {
+                    step_ring(o, delta);
                 }
+                open
             });
-            if flipped == Some(true) {
+            if moved == Some(true) {
                 start_timer();
             }
         }
@@ -492,10 +503,10 @@ fn install_menu(o: &mut Ov, kind: SourceKind, menu: Menu) {
     o.last = Instant::now();
 }
 
-/// Flips between the conversion ring and the actions ring; the sectors bloom in again.
-fn toggle_ring(o: &mut Ov) {
+/// Moves `delta` rings along (wrapping); the sectors bloom in again.
+fn step_ring(o: &mut Ov, delta: i32) {
     let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return };
-    let next = menu.kind.other();
+    let next = menu.kind.step(delta);
     let fresh = menu_for(kind, next, o.files.len());
     install_menu(o, kind, fresh);
 }
@@ -517,14 +528,14 @@ fn hover_at(o: &mut Ov, pt: POINTL) -> (u32, bool) {
     let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return (NONE, false) };
     let m = o.look.m;
     let (dx, dy) = offset(o, pt);
-    let on_hub = dx.hypot(dy) < m.hub && menu.switchable && o.switch.hub();
+    let on_hub = dx.hypot(dy) < m.hub && o.switch.hub();
     let (progress, flip) = o.dwell.update(on_hub, o.clock.elapsed().as_millis() as u32);
     // While the pointer rests on the hub the frame timer must keep running to advance the dwell.
     let mut changed = (progress - o.scene.dwell).abs() > 0.002 || o.dwell.pending();
     o.scene.dwell = progress;
     if flip {
         o.scene.dwell = 0.0;
-        toggle_ring(o);
+        step_ring(o, 1);
         return (NONE, true);
     }
     let any = sector_at(dx, dy, o.scene.slots.len(), m.hub, m.hit_out);
@@ -628,16 +639,18 @@ unsafe extern "system" fn drag_enter(
 ) -> i32 {
     let files = read_files(data);
     *effect = NONE;
-    let Some(kind) = files.first().and_then(|f| engine::detect(f)) else { return 0 };
+    // Any file gets the menus; one the engine cannot read shows them greyed out, with the reason.
+    let Some(kind) = files.first().map(|f| engine::detect_any(f)) else { return 0 };
     let cfg = crate::current_config();
     let opened = with(|o| {
         o.switch = cfg.ring_switch;
         o.lang = cfg.lang;
         o.size_txt = size_text(&files, cfg.lang);
         o.files = files;
-        let wanted = if matches!(kind, SourceKind::Image(_)) { cfg.start_ring } else { RingKind::Convert };
+        let wanted = cfg.start_ring.unwrap_or_else(|| RingKind::home(kind));
         let menu = menu_for(kind, wanted, o.files.len());
-        TAB_SWITCH.store(menu.switchable && o.switch.tab(), Relaxed);
+        TAB_SWITCH.store(o.switch.tab(), Relaxed);
+        WHEEL_SWITCH.store(true, Relaxed);
         install_menu(o, kind, menu);
         o.phase = Phase::Open;
         o.target_open = 1.0;
@@ -687,6 +700,7 @@ unsafe extern "system" fn on_drop(_: *mut c_void, _data: *mut c_void, _keys: u32
     if let Some((op, files)) = job {
         *effect = COPY;
         TAB_SWITCH.store(false, Relaxed);
+        WHEEL_SWITCH.store(false, Relaxed);
         start_timer();
         run(op, files);
     } else {

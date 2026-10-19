@@ -370,6 +370,7 @@ impl Theme {
 
 /// Built-in presets in display order. To add one: drop a file in `assets/themes/` and list it here.
 pub const BUILTIN: &[(&str, &str)] = &[
+    ("windows", include_str!("../assets/themes/windows.theme")),
     ("glass", include_str!("../assets/themes/glass.theme")),
     ("frost", include_str!("../assets/themes/frost.theme")),
     ("ink", include_str!("../assets/themes/ink.theme")),
@@ -387,11 +388,43 @@ pub fn builtin() -> Vec<Theme> {
 /// Looks a theme up by id: built-ins first, then `extra` (user theme files).
 pub fn find(name: &str, extra: &[Theme]) -> Theme {
     let all = builtin();
-    all.into_iter()
+    let found = all
+        .into_iter()
         .chain(extra.iter().cloned())
         .find(|t| t.name == name)
         .or_else(|| builtin().into_iter().next())
-        .unwrap_or_else(Theme::base)
+        .unwrap_or_else(Theme::base);
+    if found.name == WINDOWS {
+        windows_variant(found, crate::settings::system_is_dark(), crate::settings::system_accent())
+    } else {
+        found
+    }
+}
+
+/// Id of the preset that follows the system look.
+pub const WINDOWS: &str = "windows";
+
+/// The Windows 11 preset for the given apps mode and accent colour. The file holds the dark look; light mode swaps
+/// the acrylic tints, the text and the edge, and the system accent replaces the file's blue in both.
+pub fn windows_variant(mut t: Theme, dark: bool, accent: Rgba) -> Theme {
+    t.accent = accent;
+    t.accent2 = accent;
+    t.hover_fill = Rgba(accent.0, accent.1, accent.2, 235);
+    t.hover_text = if crate::settings::luma(accent) > 0.6 { Rgba::rgb(0, 0, 0) } else { Rgba::rgb(255, 255, 255) };
+    if !dark {
+        t.light = true;
+        t.text = Rgba::rgb(0x1a, 0x1a, 0x1a);
+        t.text_dim = Rgba(0x1a, 0x1a, 0x1a, 0xa8);
+        t.glass_top = Rgba(0xfc, 0xfc, 0xfc, 0xdc);
+        t.glass_bottom = Rgba(0xf3, 0xf3, 0xf3, 0xd2);
+        t.hub = Rgba(0xf9, 0xf9, 0xf9, 0xe6);
+        t.rim = Rgba(0, 0, 0, 0x1c);
+        t.highlight = Rgba(255, 255, 255, 0x90);
+        t.shadow = Rgba(0, 0, 0, 0x40);
+        t.preview_a = Rgba::rgb(0x9c, 0xc4, 0xee);
+        t.preview_b = Rgba::rgb(0xe8, 0xf1, 0xfb);
+    }
+    t
 }
 
 #[cfg(test)]
@@ -459,6 +492,7 @@ mod tests {
         let all = builtin();
         assert_eq!(all.len(), BUILTIN.len(), "a preset failed to parse");
         assert!(all.len() >= 6);
+        assert_eq!(all[0].name, WINDOWS, "the system look comes first, so it is the fallback");
         for (i, t) in all.iter().enumerate() {
             assert_eq!(t.name, BUILTIN[i].0, "file key and `name` must agree");
             assert!(all.iter().filter(|o| o.name == t.name).count() == 1);
@@ -479,5 +513,20 @@ mod tests {
         assert_eq!(Rgba::from_hsv(120.0, 1.0, 1.0), Rgba(0, 255, 0, 255));
         assert_eq!(Rgba::from_hsv(240.0, 1.0, 0.5), Rgba(0, 0, 128, 255));
         assert_eq!(Rgba::from_hsv(77.0, 0.0, 1.0), Rgba(255, 255, 255, 255));
+    }
+
+    #[test]
+    fn the_windows_preset_takes_the_system_accent_and_mode() {
+        let base = builtin().into_iter().find(|t| t.name == WINDOWS).unwrap();
+        let pink = Rgba::rgb(0xe3, 0x00, 0x8c);
+        let dark = windows_variant(base.clone(), true, pink);
+        assert_eq!((dark.accent, dark.light), (pink, false));
+        assert_eq!(dark.hover_fill, Rgba(0xe3, 0x00, 0x8c, 235));
+        assert_eq!(dark.hover_text, Rgba::rgb(255, 255, 255));
+        assert_eq!(dark.glass_top, base.glass_top, "dark mode keeps the file's tints");
+        let light = windows_variant(base, false, Rgba::rgb(0xff, 0xf1, 0x00));
+        assert!(light.light && light.text.0 < 0x40, "light mode wears dark text");
+        assert_eq!(light.hover_text, Rgba::rgb(0, 0, 0), "a bright accent needs dark text on it");
+        assert!(light.validate().is_ok() && dark.validate().is_ok());
     }
 }

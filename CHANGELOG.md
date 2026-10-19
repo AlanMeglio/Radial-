@@ -3,6 +3,17 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- New default look, "Windows 11": flat acrylic sectors, thin edge, no glow, sentence-case labels, and it follows the system light/dark mode and accent colour. The dialogs and Settings were restyled the same way (Windows 11 neutrals, 4 px controls, accent-bar tabs, no uppercase captions). The older themes remain available.
+- Every file now gets all three rings (documents, images, actions) and the mouse wheel moves between them while you
+  drag; Tab and resting on the hub go to the next ring. Sectors that cannot work for the file are greyed out with the
+  reason instead of the ring being missing. The `start_ring` setting is now `auto`, `documents`, `images` or `actions`
+  (`convert` still reads as `auto`).
+- A file Radial does not read still opens the menu, with every sector greyed out, instead of nothing.
+
 ## [0.1.0] - 2026-10-18
 
 First public release.

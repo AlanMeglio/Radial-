@@ -166,7 +166,7 @@ impl Dialog for RedactDialog {
                     w,
                     20.0,
                 ];
-                pen.fill(chip, 10.0, Rgba(10, 12, 20, 210));
+                pen.fill(chip, 4.0, Rgba(0, 0, 0, 200));
                 pen.text_c(&label, chip[0] + w / 2.0, chip[1] + 10.5, 11.5, Rgba(255, 255, 255, 255));
             }
         }

@@ -6,7 +6,7 @@ use tiny_skia::{FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, Pi
 use super::geom::Fit;
 use crate::config::Lang;
 use crate::render::{clamp01, linear, solid, stroke, Face};
-use crate::settings::{rrect, Pal};
+use crate::settings::{rrect, Pal, RADIUS, RADIUS_CARD};
 use crate::theme::Rgba;
 
 /// A rectangle as `[x, y, w, h]` in logical pixels.
@@ -143,17 +143,15 @@ impl Pen<'_> {
 
     fn focus_ring(&mut self, r: R, rad: f32, id: u32) {
         if self.focus == Some(id) {
-            let g = [r[0] - 3.0, r[1] - 3.0, r[2] + 6.0, r[3] + 6.0];
-            self.ring(g, rad + 3.0, self.pal.accent, 1.6);
+            let g = [r[0] - 2.0, r[1] - 2.0, r[2] + 4.0, r[3] + 4.0];
+            self.ring(g, rad + 2.0, self.pal.text, 2.0);
         }
     }
 
-    /// Small uppercase caption above a group of controls.
+    /// Caption above a group of controls.
     pub fn label(&mut self, t: &str, x: f32, y: f32) {
         let c = self.pal.dim;
-        let up = t.to_uppercase();
-        let s = self.s;
-        self.face.draw_left(self.pm, &up, x * s, (y + 7.0) * s, 10.5 * s, c, 1.0, 0.12 * 10.5 * s);
+        self.text(t, x, y + 7.0, 12.0, c);
     }
 
     pub fn button(&mut self, r: R, label: &str, id: u32, style: Style, enabled: bool) {
@@ -169,19 +167,19 @@ impl Pen<'_> {
             Style::Secondary => (if hov { self.pal.card_hi } else { self.pal.card }, self.pal.text),
         };
         let (bg, fg) = if enabled { (bg, fg) } else { (self.pal.card_hi, self.pal.dim.fade(0.6)) };
-        self.fill(r, 10.0, bg);
+        self.fill(r, RADIUS, bg);
         if style == Style::Secondary || !enabled {
-            self.outline(r, 10.0, self.pal.border);
+            self.outline(r, RADIUS, self.pal.border);
         }
         let shown = self.fit(label, 13.0, r[2] - 12.0);
         self.text_c(&shown, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0 + 0.5, 13.0, fg);
         if enabled {
             self.hit(r, id, Kind::Button);
-            self.focus_ring(r, 10.0, id);
+            self.focus_ring(r, RADIUS, id);
         }
     }
 
-    /// A pill that is either selected or not (aspect ratios, tools).
+    /// A toggle button that is either selected or not (aspect ratios, tools).
     pub fn chip(&mut self, r: R, label: &str, sel: bool, id: u32) {
         let hov = self.hovered(id);
         let (bg, fg) = if sel {
@@ -191,19 +189,19 @@ impl Pen<'_> {
         } else {
             (self.pal.card, self.pal.dim)
         };
-        self.fill(r, 9.0, bg);
+        self.fill(r, RADIUS, bg);
         if !sel {
-            self.outline(r, 9.0, self.pal.border);
+            self.outline(r, RADIUS, self.pal.border);
         }
         self.text_c(label, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0 + 0.5, 12.0, fg);
         self.hit(r, id, Kind::Button);
-        self.focus_ring(r, 9.0, id);
+        self.focus_ring(r, RADIUS, id);
     }
 
     /// Segmented control; segment `i` has the id `base + i`.
     pub fn seg(&mut self, r: R, labels: &[&str], sel: usize, base: u32) {
-        self.fill(r, 9.0, self.pal.card);
-        self.outline(r, 9.0, self.pal.border);
+        self.fill(r, RADIUS, self.pal.card);
+        self.outline(r, RADIUS, self.pal.border);
         let w = (r[2] - 6.0) / labels.len().max(1) as f32;
         for (i, l) in labels.iter().enumerate() {
             let cell = [r[0] + 3.0 + w * i as f32, r[1] + 3.0, w, r[3] - 6.0];
@@ -216,24 +214,31 @@ impl Pen<'_> {
                 (None, self.pal.dim)
             };
             if let Some(f) = fill {
-                self.fill(cell, 7.0, f);
+                self.fill(cell, RADIUS - 1.0, f);
             }
             self.text_c(l, cell[0] + w / 2.0, cell[1] + cell[3] / 2.0 + 0.5, 12.0, txt);
             self.hit(cell, id, Kind::Button);
-            self.focus_ring(cell, 7.0, id);
+            self.focus_ring(cell, RADIUS - 1.0, id);
         }
     }
 
     /// Horizontal slider with its track in `r`; `t` is 0..1. Returns nothing: the dialog maps the pointer itself.
     pub fn slider(&mut self, r: R, t: f32, id: u32) {
         let mid = r[1] + r[3] / 2.0;
-        self.fill([r[0], mid - 2.5, r[2], 5.0], 2.5, self.pal.card_hi);
+        self.fill([r[0], mid - 2.0, r[2], 4.0], 2.0, self.pal.dim.fade(0.45));
         let kx = r[0] + r[2] * clamp01(t);
-        self.fill([r[0], mid - 2.5, kx - r[0], 5.0], 2.5, self.pal.accent);
-        let big = self.hovered(id) || self.pressed == Some(id);
-        let rad = if big { 7.5 } else { 6.5 };
-        self.fill([kx - rad - 1.0, mid - rad - 1.0, rad * 2.0 + 2.0, rad * 2.0 + 2.0], rad + 1.0, self.pal.bg);
-        self.fill([kx - rad, mid - rad, rad * 2.0, rad * 2.0], rad, self.pal.accent);
+        self.fill([r[0], mid - 2.0, kx - r[0], 4.0], 2.0, self.pal.accent);
+        // Windows 11 thumb: a round plate with the coloured dot inside; the dot grows under the pointer.
+        let dot = if self.pressed == Some(id) {
+            5.0
+        } else if self.hovered(id) {
+            7.0
+        } else {
+            6.0
+        };
+        self.fill([kx - 10.0, mid - 10.0, 20.0, 20.0], 10.0, self.pal.card_hi);
+        self.outline([kx - 10.0, mid - 10.0, 20.0, 20.0], 10.0, self.pal.border);
+        self.fill([kx - dot, mid - dot, dot * 2.0, dot * 2.0], dot, self.pal.accent);
         self.hit([r[0] - 8.0, r[1] - 4.0, r[2] + 16.0, r[3] + 8.0], id, Kind::Drag);
     }
 
@@ -247,9 +252,9 @@ impl Pen<'_> {
 
     pub fn check(&mut self, r: R, label: &str, on: bool, id: u32) {
         let box_ = [r[0], r[1] + (r[3] - 18.0) / 2.0, 18.0, 18.0];
-        self.fill(box_, 5.0, if on { self.pal.accent } else { self.pal.card_hi });
+        self.fill(box_, RADIUS, if on { self.pal.accent } else { self.pal.card });
         if !on {
-            self.outline(box_, 5.0, self.pal.border);
+            self.outline(box_, RADIUS, self.pal.dim);
         } else {
             let (x, y) = (box_[0], box_[1]);
             self.line((x + 4.5, y + 9.5), (x + 7.8, y + 12.8), self.pal.on_accent, 1.8);
@@ -257,12 +262,12 @@ impl Pen<'_> {
         }
         self.text(label, r[0] + 26.0, r[1] + r[3] / 2.0 + 0.5, 12.5, self.pal.text);
         self.hit(r, id, Kind::Button);
-        self.focus_ring(box_, 5.0, id);
+        self.focus_ring(box_, RADIUS, id);
     }
 
     pub fn swatch(&mut self, r: R, a: Rgba, b: Option<Rgba>, sel: bool, id: u32) {
         let s = self.s;
-        if let Some(path) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, 9.0 * s) {
+        if let Some(path) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, RADIUS * s) {
             let paint = match b {
                 Some(b) => linear(
                     (r[0] * s, r[1] * s),
@@ -273,23 +278,23 @@ impl Pen<'_> {
             };
             self.pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
         }
-        self.outline(r, 9.0, self.pal.border);
+        self.outline(r, RADIUS, self.pal.border);
         if sel {
-            self.ring([r[0] - 2.5, r[1] - 2.5, r[2] + 5.0, r[3] + 5.0], 11.0, self.pal.text, 1.8);
+            self.ring([r[0] - 2.5, r[1] - 2.5, r[2] + 5.0, r[3] + 5.0], RADIUS + 2.5, self.pal.text, 2.0);
         } else if self.hovered(id) {
-            self.ring([r[0] - 1.5, r[1] - 1.5, r[2] + 3.0, r[3] + 3.0], 10.5, self.pal.dim, 1.2);
+            self.ring([r[0] - 1.5, r[1] - 1.5, r[2] + 3.0, r[3] + 3.0], RADIUS + 1.5, self.pal.dim, 1.2);
         }
         self.hit(r, id, Kind::Button);
-        self.focus_ring(r, 9.0, id);
+        self.focus_ring(r, RADIUS, id);
     }
 
     /// A text field; `suffix` is dim text on the right (`px`).
     pub fn field(&mut self, r: R, f: &Field, id: u32, suffix: &str) {
         let focused = self.focus == Some(id);
-        self.fill(r, 8.0, self.pal.card);
-        self.outline(r, 8.0, if focused { self.pal.accent } else { self.pal.border });
+        self.fill(r, RADIUS, self.pal.card);
+        self.outline(r, RADIUS, self.pal.border);
         if focused {
-            self.ring([r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0], 9.0, self.pal.accent.fade(0.45), 1.5);
+            self.fill([r[0] + 1.0, r[1] + r[3] - 2.0, r[2] - 2.0, 2.0], 1.0, self.pal.accent);
         }
         let right = r[0] + r[2] - 8.0;
         if !suffix.is_empty() {
@@ -301,7 +306,7 @@ impl Pen<'_> {
         let tw = self.width(&shown, 12.5);
         if focused && f.all && !f.text.is_empty() {
             let sel = [r[0] + 6.0, r[1] + 5.0, tw + 4.0, r[3] - 10.0];
-            self.fill(sel, 4.0, self.pal.accent.fade(0.35));
+            self.fill(sel, 2.0, self.pal.accent.fade(0.35));
         }
         self.text(&shown, r[0] + 8.0, cy, 12.5, self.pal.text);
         if focused && !f.all {
@@ -340,7 +345,7 @@ impl Pen<'_> {
     pub fn busy(&mut self, r: R, msg: &str) {
         let veil = Rgba(self.pal.bg.0, self.pal.bg.1, self.pal.bg.2, 200);
         let s = self.s;
-        if let Some(p) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, 16.0 * s) {
+        if let Some(p) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, RADIUS_CARD * s) {
             self.pm.fill_path(&p, &solid(veil, 1.0), FillRule::Winding, Transform::identity(), None);
         }
         let (cx, cy) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
@@ -524,8 +529,8 @@ impl Canvas {
     /// Draws the card, the checkerboard and `source` (any size, stretched to the fitted rectangle).
     pub fn draw(&mut self, pen: &mut Pen, source: Option<&image::RgbaImage>) {
         let s = pen.s;
-        pen.fill(self.r, 16.0, pen.pal.card_hi.mix(pen.pal.bg, 0.5));
-        pen.outline(self.r, 16.0, pen.pal.border);
+        pen.fill(self.r, RADIUS_CARD, pen.pal.card_hi.mix(pen.pal.bg, 0.5));
+        pen.outline(self.r, RADIUS_CARD, pen.pal.border);
         let Some(src) = source else { return };
         let ir = self.img_rect();
         let (dw, dh) = ((ir[2] * s).round().max(1.0) as u32, (ir[3] * s).round().max(1.0) as u32);

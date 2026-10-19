@@ -10,6 +10,8 @@ pub enum SourceKind {
     Pdf,
     Docx,
     Text,
+    /// Anything the engine does not read. The menus still open for it, with every sector greyed out and explained.
+    Other,
 }
 
 /// What a conversion can produce.
@@ -87,6 +89,24 @@ pub fn detect(path: &Path) -> Option<SourceKind> {
     detect_head(path.extension().and_then(|e| e.to_str()), &head)
 }
 
+/// `detect`, but a file the engine does not read is `Other` instead of nothing, so every drag gets a menu.
+pub fn detect_any(path: &Path) -> SourceKind {
+    detect(path).unwrap_or(SourceKind::Other)
+}
+
+/// Can the pipeline turn `kind` into `to`? Mirrors `convert_bytes`; a unit test keeps the two in step.
+pub fn supports(kind: SourceKind, to: Target) -> bool {
+    use SourceKind as S;
+    use Target as T;
+    matches!(
+        (kind, to),
+        (S::Image(_), T::Image(_) | T::Pdf | T::Docx)
+            | (S::Pdf, T::Image(_) | T::Txt | T::Docx)
+            | (S::Docx, T::Txt | T::Pdf)
+            | (S::Text, T::Pdf | T::Docx)
+    )
+}
+
 /// Replacement for a source's own format in the 8-sector image menu.
 const IMAGE_MENU: [Fmt; 6] = [Fmt::Png, Fmt::Webp, Fmt::Heic, Fmt::Tiff, Fmt::Avif, Fmt::Bmp];
 
@@ -103,6 +123,7 @@ pub fn targets_for(kind: SourceKind) -> Vec<Target> {
         }
         SourceKind::Docx => vec![Target::Pdf, Target::Txt],
         SourceKind::Text => vec![Target::Pdf, Target::Docx],
+        SourceKind::Other => vec![],
     }
 }
 

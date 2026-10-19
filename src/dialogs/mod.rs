@@ -348,7 +348,7 @@ unsafe fn open_dialog(dlg: Box<dyn Dialog>, lang: Lang, dpi: u32) {
         face,
         dlg,
         host,
-        accent: crate::current_look().theme.accent,
+        accent: crate::settings::system_accent(),
         tracking: false,
         timer: false,
         last_tick: Instant::now(),
@@ -714,7 +714,7 @@ pub fn cli(args: &[String]) -> bool {
     if let Some(t) = get("--theme") {
         cfg.apply_theme(&crate::theme::find(&t, &user));
     }
-    let accent = crate::render::Look::new(&cfg, &user).theme.accent;
+    let accent = crate::settings::system_accent();
     let dark = !args.iter().any(|a| a == "--light");
     let mut host = Host {
         hwnd: null_mut(),

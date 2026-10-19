@@ -35,6 +35,9 @@ const BOX: (f32, f32, f32, f32) = (24.0, 84.0, 440.0, 440.0); // preview card
 const RX: f32 = 496.0; // right panel left edge
 const RW: f32 = 420.0; // right panel width
 const TIMER: usize = 1;
+/// The choices of the "menu opens on" control, in display order.
+const START_RINGS: [Option<RingKind>; 4] =
+    [None, Some(RingKind::Documents), Some(RingKind::Images), Some(RingKind::Actions)];
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -56,31 +59,60 @@ pub(crate) fn luma(c: Rgba) -> f32 {
     (0.299 * c.0 as f32 + 0.587 * c.1 as f32 + 0.114 * c.2 as f32) / 255.0
 }
 
+/// The accent colour the user picked in Windows (Settings > Personalization > Colors), or the Windows blue.
+pub(crate) fn system_accent() -> Rgba {
+    let (sub, name) = (wide("Software\\Microsoft\\Windows\\DWM"), wide("AccentColor"));
+    let mut v: u32 = 0;
+    let mut cb = 4u32;
+    let r = unsafe {
+        RegGetValueW(
+            0x8000_0001u32 as i32 as isize,
+            sub.as_ptr(),
+            name.as_ptr(),
+            0x10,
+            null_mut(),
+            &mut v as *mut u32 as *mut c_void,
+            &mut cb,
+        )
+    };
+    // The value is 0xAABBGGRR.
+    if r == 0 {
+        Rgba::rgb((v & 0xff) as u8, ((v >> 8) & 0xff) as u8, ((v >> 16) & 0xff) as u8)
+    } else {
+        Rgba::rgb(0x00, 0x78, 0xd4)
+    }
+}
+
+/// Corner radii of the Windows 11 design language: 4 px for controls, 8 px for cards and panels.
+pub(crate) const RADIUS: f32 = 4.0;
+pub(crate) const RADIUS_CARD: f32 = 8.0;
+
+/// Windows 11 neutrals for the dialogs and the settings window, with the system accent.
 pub(crate) fn palette(dark: bool, accent: Rgba) -> Pal {
-    // The configurator wears the chosen accent, unless it would vanish against the background.
-    let fallback = Rgba::rgb(0x5b, 0x8c, 0xff);
+    // Fall back to the Windows blue when the accent would vanish against the background.
+    let fallback = Rgba::rgb(0x00, 0x78, 0xd4);
     let ok = if dark { luma(accent) > 0.28 } else { luma(accent) < 0.72 };
     let accent = if ok { Rgba(accent.0, accent.1, accent.2, 255) } else { fallback };
-    let on_accent = if luma(accent) > 0.6 { Rgba::rgb(0x10, 0x12, 0x18) } else { Rgba::rgb(255, 255, 255) };
+    let on_accent = if luma(accent) > 0.6 { Rgba::rgb(0x00, 0x00, 0x00) } else { Rgba::rgb(255, 255, 255) };
     if dark {
         Pal {
-            bg: Rgba::rgb(0x12, 0x14, 0x1a),
-            card: Rgba::rgb(0x1b, 0x1e, 0x27),
-            card_hi: Rgba::rgb(0x26, 0x2a, 0x36),
-            border: Rgba::rgb(0x2c, 0x31, 0x3f),
-            text: Rgba::rgb(0xe9, 0xec, 0xf4),
-            dim: Rgba::rgb(0x8d, 0x95, 0xa9),
+            bg: Rgba::rgb(0x20, 0x20, 0x20),
+            card: Rgba::rgb(0x2b, 0x2b, 0x2b),
+            card_hi: Rgba::rgb(0x32, 0x32, 0x32),
+            border: Rgba::rgb(0x40, 0x40, 0x40),
+            text: Rgba::rgb(0xff, 0xff, 0xff),
+            dim: Rgba::rgb(0xa6, 0xa6, 0xa6),
             accent,
             on_accent,
         }
     } else {
         Pal {
-            bg: Rgba::rgb(0xf1, 0xf3, 0xf8),
+            bg: Rgba::rgb(0xf3, 0xf3, 0xf3),
             card: Rgba::rgb(0xff, 0xff, 0xff),
-            card_hi: Rgba::rgb(0xe6, 0xe9, 0xf2),
-            border: Rgba::rgb(0xd7, 0xdb, 0xe6),
-            text: Rgba::rgb(0x1a, 0x1f, 0x2e),
-            dim: Rgba::rgb(0x67, 0x6f, 0x84),
+            card_hi: Rgba::rgb(0xf0, 0xf0, 0xf0),
+            border: Rgba::rgb(0xdc, 0xdc, 0xdc),
+            text: Rgba::rgb(0x1a, 0x1a, 0x1a),
+            dim: Rgba::rgb(0x60, 0x60, 0x60),
             accent,
             on_accent,
         }
@@ -262,14 +294,14 @@ impl Pen<'_> {
 
     fn label(&mut self, t: &str, x: f32, y: f32) {
         let c = self.pal.dim;
-        self.text(&t.to_uppercase(), x, y + 7.0, 10.5, c, 0.12);
+        self.text(t, x, y + 7.0, 12.0, c, 0.0);
     }
 
     /// Segmented control; `labels` are shown left to right.
     fn seg(&mut self, id: Sg, y: f32, labels: &[&str], sel: usize) {
         let r = [RX, y, RW, 30.0];
-        self.fill(r, 9.0, self.pal.card);
-        self.outline(r, 9.0, self.pal.border);
+        self.fill(r, RADIUS, self.pal.card);
+        self.outline(r, RADIUS, self.pal.border);
         let n = labels.len() as f32;
         let w = (RW - 6.0) / n;
         for (i, l) in labels.iter().enumerate() {
@@ -283,7 +315,7 @@ impl Pen<'_> {
                 (None, self.pal.dim)
             };
             if let Some(f) = fill {
-                self.fill(cell, 7.0, f);
+                self.fill(cell, RADIUS - 1.0, f);
             }
             self.text_c(l, cell[0] + w / 2.0, cell[1] + 12.5, 12.0, txt, 0.0);
             self.hit(cell, act);
@@ -300,15 +332,16 @@ impl Pen<'_> {
 
     fn track(&mut self, id: Sl, r: [f32; 4], t: f32, knob: Rgba, filled: bool) {
         let mid = r[1] + r[3] / 2.0;
-        self.fill([r[0], mid - 2.5, r[2], 5.0], 2.5, self.pal.card_hi);
+        self.fill([r[0], mid - 2.0, r[2], 4.0], 2.0, self.pal.dim.fade(0.45));
         let kx = r[0] + r[2] * clamp01(t);
         if filled {
-            self.fill([r[0], mid - 2.5, kx - r[0], 5.0], 2.5, self.pal.accent);
+            self.fill([r[0], mid - 2.0, kx - r[0], 4.0], 2.0, self.pal.accent);
         }
-        let big = self.hovered(Act::Slider(id));
-        let rad = if big { 7.5 } else { 6.5 };
-        self.fill([kx - rad - 1.0, mid - rad - 1.0, rad * 2.0 + 2.0, rad * 2.0 + 2.0], rad + 1.0, self.pal.bg);
-        self.fill([kx - rad, mid - rad, rad * 2.0, rad * 2.0], rad, knob);
+        // Windows 11 thumb: a round plate with the coloured dot inside, which grows under the pointer.
+        let dot = if self.hovered(Act::Slider(id)) { 7.0 } else { 6.0 };
+        self.fill([kx - 10.0, mid - 10.0, 20.0, 20.0], 10.0, self.pal.card_hi);
+        self.outline([kx - 10.0, mid - 10.0, 20.0, 20.0], 10.0, self.pal.border);
+        self.fill([kx - dot, mid - dot, dot * 2.0, dot * 2.0], dot, knob);
         self.hit([r[0] - 8.0, r[1] - 4.0, r[2] + 16.0, r[3] + 8.0], Act::Slider(id));
     }
 
@@ -322,9 +355,9 @@ impl Pen<'_> {
         } else {
             (if hov { self.pal.card_hi } else { self.pal.card }, self.pal.text)
         };
-        self.fill(r, 10.0, bg);
+        self.fill(r, RADIUS, bg);
         if !primary {
-            self.outline(r, 10.0, self.pal.border);
+            self.outline(r, RADIUS, self.pal.border);
         }
         self.text_c(label, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0 + 0.5, 13.0, fg, 0.0);
         self.hit(r, act);
@@ -421,7 +454,7 @@ fn draw_theme_grid(p: &mut Pen, y: f32, themes: &[Theme], cfg: &Config) {
         let act = Act::Theme(i);
         // Card: the theme's sample wallpaper with a tiny glass chip in its colours.
         let s = p.s;
-        if let Some(path) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, 10.0 * s) {
+        if let Some(path) = rrect(r[0] * s, r[1] * s, r[2] * s, r[3] * s, RADIUS_CARD * s) {
             let paint = linear(
                 (r[0] * s, r[1] * s),
                 ((r[0] + r[2]) * s, (r[1] + r[3]) * s),
@@ -440,10 +473,10 @@ fn draw_theme_grid(p: &mut Pen, y: f32, themes: &[Theme], cfg: &Config) {
         let ink = if t.light { Rgba(0x1b, 0x22, 0x36, 255) } else { Rgba(255, 255, 255, 255) };
         p.text_c(&t.label, cx + cw / 2.0, cy + ch - 12.0, 10.5, ink, 0.0);
         if sel {
-            p.outline([r[0] - 2.0, r[1] - 2.0, r[2] + 4.0, r[3] + 4.0], 12.0, p.pal.accent);
-            p.outline([r[0] - 3.0, r[1] - 3.0, r[2] + 6.0, r[3] + 6.0], 13.0, p.pal.accent);
+            p.outline([r[0] - 2.0, r[1] - 2.0, r[2] + 4.0, r[3] + 4.0], RADIUS_CARD + 2.0, p.pal.accent);
+            p.outline([r[0] - 3.0, r[1] - 3.0, r[2] + 6.0, r[3] + 6.0], RADIUS_CARD + 3.0, p.pal.accent);
         } else if p.hovered(act) {
-            p.outline([r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0], 11.0, p.pal.dim);
+            p.outline([r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0], RADIUS_CARD + 1.0, p.pal.dim);
         }
         p.hit(r, act);
     }
@@ -459,16 +492,16 @@ fn draw_accent(p: &mut Pen, y: f32, cfg: &Config, theme: &Theme) {
         let r = [x, y + 20.0, 28.0, 28.0];
         let act = Act::Accent(sel_c);
         let sel = cfg.accent == sel_c;
-        p.fill(r, 14.0, c);
-        p.outline(r, 14.0, p.pal.border);
+        p.fill(r, RADIUS_CARD - 2.0, c);
+        p.outline(r, RADIUS_CARD - 2.0, p.pal.border);
         if sel_c.is_none() {
             // A ring marks "follow the theme".
-            p.outline([r[0] + 4.0, r[1] + 4.0, r[2] - 8.0, r[3] - 8.0], 10.0, Rgba(0, 0, 0, 120));
+            p.outline([r[0] + 4.0, r[1] + 4.0, r[2] - 8.0, r[3] - 8.0], RADIUS - 1.0, Rgba(0, 0, 0, 120));
         }
         if sel {
-            p.outline([r[0] - 3.0, r[1] - 3.0, r[2] + 6.0, r[3] + 6.0], 17.0, p.pal.text);
+            p.outline([r[0] - 3.0, r[1] - 3.0, r[2] + 6.0, r[3] + 6.0], RADIUS_CARD + 1.0, p.pal.text);
         } else if p.hovered(act) {
-            p.outline([r[0] - 2.0, r[1] - 2.0, r[2] + 4.0, r[3] + 4.0], 16.0, p.pal.dim);
+            p.outline([r[0] - 2.0, r[1] - 2.0, r[2] + 4.0, r[3] + 4.0], RADIUS_CARD, p.pal.dim);
         }
         p.hit(r, act);
         x += RW / 10.0;
@@ -535,8 +568,8 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
     y += 52.0;
     if let Some(dir) = &cfg.out_dir {
         let r = [RX, y - 4.0, RW - 96.0, 28.0];
-        p.fill(r, 8.0, p.pal.card);
-        p.outline(r, 8.0, p.pal.border);
+        p.fill(r, RADIUS, p.pal.card);
+        p.outline(r, RADIUS, p.pal.border);
         let mut shown = dir.clone();
         while shown.chars().count() > 38 {
             shown = format!("...{}", shown.chars().skip(shown.chars().count() - 36).collect::<String>());
@@ -562,8 +595,9 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
     p.seg(Sg::RingSwitch, y + 18.0, &[tr(l, "sw-label-both"), tr(l, "sw-tab"), tr(l, "sw-hub")], ssel);
     y += 52.0;
     p.label(tr(l, "start-ring"), RX, y);
-    let rsel = (cfg.start_ring == RingKind::Actions) as usize;
-    p.seg(Sg::StartRing, y + 18.0, &[tr(l, "ring-convert"), tr(l, "ring-actions")], rsel);
+    let rsel = START_RINGS.iter().position(|r| *r == cfg.start_ring).unwrap_or(0);
+    let names = [tr(l, "ring-auto"), tr(l, "ring-pick-documents"), tr(l, "ring-pick-images"), tr(l, "ring-actions")];
+    p.seg(Sg::StartRing, y + 18.0, &names, rsel);
     y += 52.0;
     draw_autostart(p, y, cfg);
     y += 38.0;
@@ -573,12 +607,17 @@ fn draw_behavior_tab(p: &mut Pen, cfg: &Config) {
 
 fn draw_autostart(p: &mut Pen, y: f32, cfg: &Config) {
     p.text(tr(cfg.lang, "autostart"), RX, y + 12.0, 12.5, p.pal.text, 0.0);
-    let r = [RX + RW - 46.0, y + 1.0, 46.0, 24.0];
+    let r = [RX + RW - 40.0, y + 3.0, 40.0, 20.0];
     let on = cfg.autostart;
-    p.fill(r, 12.0, if on { p.pal.accent } else { p.pal.card_hi });
-    let kx = if on { r[0] + r[2] - 13.0 } else { r[0] + 13.0 };
-    p.fill([kx - 9.0, r[1] + 3.0, 18.0, 18.0], 9.0, if on { p.pal.on_accent } else { p.pal.dim });
-    p.hit(r, Act::Autostart);
+    if on {
+        p.fill(r, 10.0, p.pal.accent);
+    } else {
+        p.outline(r, 10.0, p.pal.dim);
+    }
+    let kx = if on { r[0] + r[2] - 10.0 } else { r[0] + 10.0 };
+    let knob = if on { 6.0 } else { 5.0 };
+    p.fill([kx - knob, r[1] + 10.0 - knob, knob * 2.0, knob * 2.0], knob, if on { p.pal.on_accent } else { p.pal.dim });
+    p.hit([r[0], r[1] - 3.0, r[2], r[3] + 6.0], Act::Autostart);
 }
 
 fn draw_step(p: &mut Pen, ui_step: usize, cfg: &Config, themes: &[Theme], theme: &Theme) {
@@ -610,16 +649,16 @@ fn draw_step(p: &mut Pen, ui_step: usize, cfg: &Config, themes: &[Theme], theme:
             // A big key cap showing what to hold.
             let name = crate::key_name(cfg.trigger, l);
             let cap = [RX + RW / 2.0 - 70.0, 252.0, 140.0, 92.0];
-            p.fill([cap[0], cap[1] + 6.0, cap[2], cap[3]], 18.0, p.pal.border);
-            p.fill(cap, 18.0, p.pal.card_hi);
-            p.outline(cap, 18.0, p.pal.dim.fade(0.5));
+            p.fill([cap[0], cap[1] + 4.0, cap[2], cap[3]], RADIUS_CARD, p.pal.border);
+            p.fill(cap, RADIUS_CARD, p.pal.card_hi);
+            p.outline(cap, RADIUS_CARD, p.pal.dim.fade(0.5));
             p.text_c(
                 name,
                 cap[0] + cap[2] / 2.0,
                 cap[1] + cap[3] / 2.0,
                 if name.len() > 6 { 15.0 } else { 26.0 },
                 p.pal.text,
-                0.04,
+                0.0,
             );
             if cfg.trigger == TriggerKey::None {
                 p.text_c(tr(l, "no-key-hint"), RX + RW / 2.0, 372.0, 12.0, p.pal.dim, 0.0);
@@ -643,8 +682,8 @@ fn draw_step(p: &mut Pen, ui_step: usize, cfg: &Config, themes: &[Theme], theme:
             let lines = [tr(l, "how1").to_string(), tr(l, "how2").replace("{}", key), tr(l, "how3").to_string()];
             for (i, line) in lines.iter().enumerate() {
                 let r = [RX, 168.0 + i as f32 * 66.0, RW, 54.0];
-                p.fill(r, 14.0, p.pal.card);
-                p.outline(r, 14.0, p.pal.border);
+                p.fill(r, RADIUS_CARD, p.pal.card);
+                p.outline(r, RADIUS_CARD, p.pal.border);
                 p.fill([r[0] + 14.0, r[1] + 13.0, 28.0, 28.0], 14.0, p.pal.accent);
                 p.text_c(&(i + 1).to_string(), r[0] + 28.0, r[1] + 27.5, 13.0, p.pal.on_accent, 0.0);
                 p.text(line, r[0] + 58.0, r[1] + 27.5, 14.0, p.pal.text, 0.0);
@@ -658,7 +697,7 @@ fn draw_step(p: &mut Pen, ui_step: usize, cfg: &Config, themes: &[Theme], theme:
 /// Draws the whole window; rebuilds the hit list.
 fn draw_all(ui: &mut Ui) {
     let s = ui.dpi;
-    let pal = palette(ui.dark, ui.look.theme.accent);
+    let pal = palette(ui.dark, system_accent());
     ui.pm.fill(Color::from_rgba8(pal.bg.0, pal.bg.1, pal.bg.2, 255));
     ui.hits.clear();
     let theme = theme::find(&ui.cfg.theme, &ui.themes);
@@ -692,13 +731,13 @@ fn draw_all(ui: &mut Ui) {
                 let r = [x, 22.0, w, 30.0];
                 let act = Act::Tab(i);
                 if i == tab {
-                    pen.fill(r, 15.0, pal.accent);
-                    pen.text_c(lab, x + w / 2.0, 37.5, 13.5, pal.on_accent, 0.0);
+                    pen.text_c(lab, x + w / 2.0, 37.0, 13.5, pal.text, 0.0);
+                    pen.fill([x + 8.0, r[1] + r[3] - 2.0, w - 16.0, 3.0], 1.5, pal.accent);
                 } else {
                     if pen.hovered(act) {
-                        pen.fill(r, 15.0, pal.card_hi);
+                        pen.fill(r, RADIUS, pal.card_hi);
                     }
-                    pen.text_c(lab, x + w / 2.0, 37.5, 13.5, pal.dim, 0.0);
+                    pen.text_c(lab, x + w / 2.0, 37.0, 13.5, pal.dim, 0.0);
                 }
                 pen.hit(r, act);
                 x += w + 6.0;
@@ -744,7 +783,7 @@ fn draw_preview_card(ui: &mut Ui, pal: &Pal) {
     let r = ui.prev.rect;
     let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
     // Frame behind the wallpaper (shows as a hairline border).
-    if let Some(p) = rrect(x - s, y - s, w + 2.0 * s, h + 2.0 * s, 20.0 * s) {
+    if let Some(p) = rrect(x - s, y - s, w + 2.0 * s, h + 2.0 * s, (RADIUS_CARD + 1.0) * s) {
         ui.pm.fill_path(&p, &solid(pal.border, 1.0), FillRule::Winding, Transform::identity(), None);
     }
     draw_preview_pixels(ui);
@@ -754,17 +793,17 @@ fn draw_preview_card(ui: &mut Ui, pal: &Pal) {
     let sel = [8, 4, 7].iter().position(|&k| k == ui.prev.kind).unwrap_or(0);
     let y0 = BOX.1 + BOX.3 + 14.0;
     let r2 = [BOX.0, y0, BOX.2, 30.0];
-    pen.fill(r2, 9.0, pal.card);
-    pen.outline(r2, 9.0, pal.border);
+    pen.fill(r2, RADIUS, pal.card);
+    pen.outline(r2, RADIUS, pal.border);
     let labels = [tr(l, "menu-img"), tr(l, "menu-doc"), tr(l, "menu-act")];
     let w = (BOX.2 - 6.0) / 3.0;
     for (i, lab) in labels.iter().enumerate() {
         let cell = [BOX.0 + 3.0 + w * i as f32, y0 + 3.0, w, 24.0];
         let act = Act::Seg(Sg::Menu, i);
         if i == sel {
-            pen.fill(cell, 7.0, pal.accent);
+            pen.fill(cell, RADIUS - 1.0, pal.accent);
         } else if pen.hovered(act) {
-            pen.fill(cell, 7.0, pal.card_hi);
+            pen.fill(cell, RADIUS - 1.0, pal.card_hi);
         }
         pen.text_c(lab, cell[0] + w / 2.0, cell[1] + 12.5, 12.0, if i == sel { pal.on_accent } else { pal.dim }, 0.0);
         pen.hit(cell, act);
@@ -860,7 +899,7 @@ fn draw_preview_pixels(ui: &mut Ui) {
     let (Some(wall), Some(menu)) = (p.wall.as_ref(), p.menu.as_mut()) else { return };
     p.renderer.render(menu, &p.scene, &ui.look, p.dpi_eff);
     let r = p.rect;
-    if let Some(path) = rrect(r[0], r[1], r[2], r[3], 19.0 * s) {
+    if let Some(path) = rrect(r[0], r[1], r[2], r[3], RADIUS_CARD * s) {
         let mut paint = Paint::default();
         paint.anti_alias = true;
         paint.shader = Pattern::new(
@@ -1092,7 +1131,7 @@ fn do_act(ui: &mut Ui, act: Act) {
                 }
                 Sg::Notify => ui.cfg.notify = [Notify::Off, Notify::Balloon, Notify::Sound, Notify::Both][i.min(3)],
                 Sg::RingSwitch => ui.cfg.ring_switch = [Switch::Both, Switch::Tab, Switch::Hub][i.min(2)],
-                Sg::StartRing => ui.cfg.start_ring = [RingKind::Convert, RingKind::Actions][i.min(1)],
+                Sg::StartRing => ui.cfg.start_ring = START_RINGS[i.min(3)],
                 Sg::Lang => ui.cfg.lang = if i == 0 { Lang::En } else { Lang::Es },
                 Sg::Menu => {
                     set_kind(ui, [8, 4, 7][i.min(2)]);
