@@ -20,6 +20,7 @@ pub fn run(action: ActionKind, files: Vec<PathBuf>, cfg: Config) {
         ActionKind::Checksum => checksum(&files, l),
         ActionKind::CopyPath => copy_path(&files, l),
         ActionKind::Reveal => reveal(&files, l),
+        ActionKind::CopyText => copy_text(&files, l),
         // The picture tools are not universal; nothing to do.
         _ => return,
     };
@@ -129,11 +130,30 @@ fn info(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
     Ok(Some(format!("{}\n{}", shown.join("\n"), tr(l, "copied-clipboard"))))
 }
 
+/// The SHA-256 a piece of clipboard text stands for: 64 hex digits, alone or first on the line
+/// (`sha256sum` output, `SHA256: abc...`, a hash copied from a download page with spaces around it).
+pub fn hash_in(text: &str) -> Option<String> {
+    let first = text.trim().lines().next()?.trim();
+    let first = first.strip_prefix("SHA256:").or_else(|| first.strip_prefix("sha256:")).unwrap_or(first).trim();
+    let token = first.split_whitespace().next()?;
+    (token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())).then(|| token.to_ascii_lowercase())
+}
+
+/// SHA-256 of every file. When the clipboard already holds a hash this *verifies* against it (a download page's
+/// checksum, say) and leaves the clipboard alone; otherwise it copies the hash.
 fn checksum(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
     let mut lines = Vec::with_capacity(files.len());
     for f in files {
         let h = fileops::sha256_file(f).map_err(|e| format!("{}: {e}", name_of(f)))?;
         lines.push((h, name_of(f)));
+    }
+    if let Some(expected) = shell::paste_text().as_deref().and_then(hash_in) {
+        let hit = lines.iter().find(|(h, _)| *h == expected);
+        return Ok(Some(match (hit, lines.as_slice()) {
+            (Some((_, n)), _) => fill(tr(l, "checksum-ok"), &[n, &short_hash(&expected)]),
+            (None, [(h, n)]) => fill(tr(l, "checksum-bad"), &[n, &short_hash(h), &short_hash(&expected)]),
+            (None, many) => fill(tr(l, "checksum-none"), &[&many.len().to_string(), &short_hash(&expected)]),
+        }));
     }
     let text = match lines.as_slice() {
         [(h, _)] => h.clone(),
@@ -153,6 +173,22 @@ fn copy_path(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
         [_] => tr(l, "path-copied").to_string(),
         many => fill(tr(l, "paths-copied"), &[&many.len().to_string()]),
     }))
+}
+
+fn copy_text(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
+    let mut parts = Vec::with_capacity(files.len());
+    for f in files {
+        let text = crate::engine::read_text_file(f).map_err(|e| format!("{}: {e}", name_of(f)))?;
+        parts.push((name_of(f), text));
+    }
+    let text = match parts.as_slice() {
+        [(_, one)] => one.clone(),
+        many => many.iter().map(|(n, t)| format!("--- {n} ---\r\n{t}")).collect::<Vec<_>>().join("\r\n\r\n"),
+    };
+    shell::copy_text(&text.replace('\n', "\r\n").replace("\r\r\n", "\r\n"))?;
+    let chars = text.chars().count().to_string();
+    let first: String = text.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+    Ok(Some(fill(tr(l, "text-copied"), &[&chars, &first])))
 }
 
 fn reveal(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
@@ -220,6 +256,21 @@ mod tests {
         assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "hello radial");
         assert_eq!(std::fs::read_to_string(root.join("sub").join("b.txt")).unwrap(), "second");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_hash_is_recognised_in_the_shapes_people_copy_it() {
+        let h = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(hash_in(h).as_deref(), Some(h));
+        assert_eq!(hash_in(&format!("  {}\r\n", h.to_uppercase())).as_deref(), Some(h));
+        assert_eq!(hash_in(&format!("{h}  abc.txt")).as_deref(), Some(h), "sha256sum output");
+        assert_eq!(hash_in(&format!("SHA256: {h}")).as_deref(), Some(h));
+        assert_eq!(hash_in(&format!("{h}\nsecond line")).as_deref(), Some(h));
+        assert_eq!(hash_in("C:\\Users\\me\\file.txt"), None, "a path is not a hash");
+        assert_eq!(hash_in(&h[..63]), None);
+        assert_eq!(hash_in(&format!("{h}0")), None);
+        assert_eq!(hash_in(&"g".repeat(64)), None);
+        assert_eq!(hash_in(""), None);
     }
 
     #[test]

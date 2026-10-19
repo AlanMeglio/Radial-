@@ -45,7 +45,8 @@ pub use kind::{detect, detect_any, detect_head, supports, SourceKind, Target};
 pub use os::Availability;
 #[allow(unused_imports)]
 pub use pipeline::{
-    convert_bytes, convert_file, pair_availability, source_availability, target_availability, Artifact, ConvertOptions,
+    convert_bytes, convert_file, pair_availability, read_text_file, source_availability, target_availability, Artifact,
+    ConvertOptions,
 };
 
 /// Probes the Windows codecs (HEIC/AVIF) on a background thread so the first menu does not wait for them.

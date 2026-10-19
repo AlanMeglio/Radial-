@@ -192,6 +192,11 @@ pub fn ocr_bitmap(img: &RgbaImage) -> Result<String> {
     Ok(result.Text().map_err(|e| os_err("OCR", e))?.to_string())
 }
 
+/// Reads the text of a picture with Windows OCR (on its own MTA thread, so any caller may use it).
+pub fn ocr_image(img: RgbaImage) -> Result<String> {
+    on_mta(move || ocr_bitmap(&img))
+}
+
 /// Text of every page of a scanned PDF, by rendering each page at `dpi` and running OCR on it.
 pub fn ocr_pdf_pages(pdf: &[u8], dpi: u32, max_pixels: u64) -> Result<Vec<String>> {
     let count = pdf_page_count(pdf)?;

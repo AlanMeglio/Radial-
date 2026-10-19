@@ -66,6 +66,40 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
 }
 
+/// The text a picture or a PDF holds: a PDF's own text layer, or Windows OCR for a picture and for a scanned PDF.
+/// Fails with `Unsupported` when no text is found.
+pub fn text_of(input: &[u8], kind: SourceKind) -> Result<String> {
+    let join =
+        |pages: Vec<String>| pages.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+    let text = match kind {
+        SourceKind::Image(_) => os::ocr_image(raster::decode(input)?.to_rgba8())?.trim().replace("\r\n", "\n"),
+        SourceKind::Pdf => {
+            let mut text = join(pdfread::extract_pages(input)?);
+            if text.is_empty() {
+                // No text layer: a scan, or fonts without a text map. Read the page pictures with Windows OCR.
+                text = join(os::ocr_pdf_pages(input, OCR_DPI, MAX_PIXELS)?);
+            }
+            text
+        }
+        _ => return Err(unsupported(kind, Target::Txt)),
+    };
+    if text.is_empty() {
+        let what = if kind == SourceKind::Pdf { "PDF" } else { "picture" };
+        return Err(Error::Unsupported(format!("no text could be found in this {what}")));
+    }
+    Ok(text)
+}
+
+/// `text_of` for a file on disk, whatever it is: anything but a picture or a PDF is `Unsupported`.
+pub fn read_text_file(path: &Path) -> Result<String> {
+    let input = io::read_limited(path)?;
+    let ext = path.extension().and_then(|e| e.to_str());
+    match detect_head(ext, &input[..input.len().min(HEAD_LEN)]) {
+        Some(kind @ (SourceKind::Image(_) | SourceKind::Pdf)) => text_of(&input, kind),
+        _ => Err(Error::Unsupported(format!("{}: only pictures and PDF files have text to copy", path.display()))),
+    }
+}
+
 /// Most rows of a table that become a PDF: a longer one makes a PDF nobody can use (CSV or XLSX keep every row).
 const MAX_TABLE_ROWS: usize = 20_000;
 
@@ -175,28 +209,9 @@ pub fn convert_bytes(input: &[u8], kind: SourceKind, to: Target, opts: &ConvertO
             )
         }
         (SourceKind::Pdf, Target::Image(dst)) => pdf_to_images(input, dst, opts),
-        (SourceKind::Pdf, Target::Txt) => {
-            let join = |pages: Vec<String>| {
-                pages.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
-            };
-            let mut text = join(pdfread::extract_pages(input)?);
-            if text.is_empty() {
-                // No text layer: a scan, or fonts without a text map. Read the page pictures with Windows OCR.
-                text = join(os::ocr_pdf_pages(input, OCR_DPI, MAX_PIXELS)?);
-            }
-            if text.is_empty() {
-                return Err(Error::Unsupported("no text could be found in this PDF".into()));
-            }
-            one("txt", text.into_bytes())
-        }
+        (SourceKind::Pdf, Target::Txt) => one("txt", text_of(input, kind)?.into_bytes()),
         (SourceKind::Pdf, Target::Docx) => pdf_to_docx(input),
-        (SourceKind::Image(_), Target::Txt) => {
-            let text = os::ocr_bitmap(&raster::decode(input)?.to_rgba8())?;
-            if text.trim().is_empty() {
-                return Err(Error::Unsupported("no text could be found in this picture".into()));
-            }
-            one("txt", text.trim().replace("\r\n", "\n").into_bytes())
-        }
+        (SourceKind::Image(_), Target::Txt) => one("txt", text_of(input, kind)?.into_bytes()),
         (SourceKind::Docx, Target::Txt) => one("txt", docx::docx_to_text(input)?.into_bytes()),
         (SourceKind::Docx | SourceKind::Text, Target::Pdf) => one("pdf", text_pdf(input, kind)?),
         // Documents reach pictures through the PDF their text makes.
@@ -672,6 +687,28 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(run(&big, SourceKind::Sheet, Target::Csv).is_ok(), "CSV keeps every row");
+    }
+
+    #[test]
+    fn the_text_of_a_pdf_is_read_from_its_text_layer_and_other_files_have_none_to_copy() {
+        let pdf = pdfwrite::text_to_pdf(
+            "Invoice 2024-001
+Total 125.50",
+        );
+        let text = text_of(&pdf, SourceKind::Pdf).unwrap();
+        assert!(text.contains("Invoice 2024-001") && text.contains("Total 125.50"), "{text}");
+        assert!(matches!(text_of(b"x", SourceKind::Docx), Err(Error::Unsupported(_))));
+        let d = tmp("readtext");
+        let doc = d.join("memo.docx");
+        std::fs::write(&doc, docx::text_to_docx("hello")).unwrap();
+        match read_text_file(&doc) {
+            Err(Error::Unsupported(m)) => assert!(m.contains("memo.docx"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        let file = d.join("invoice.pdf");
+        std::fs::write(&file, &pdf).unwrap();
+        assert!(read_text_file(&file).unwrap().contains("Total 125.50"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

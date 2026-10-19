@@ -58,6 +58,36 @@ pub fn copy_text(text: &str) -> Result<(), String> {
     }
 }
 
+/// The Unicode text on the clipboard, if there is any.
+pub fn paste_text() -> Option<String> {
+    use windows_sys::Win32::System::DataExchange::GetClipboardData;
+    // SAFETY: the clipboard is opened for the read and closed again; the locked block is only read up to its NUL.
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return None;
+        }
+        let h = GetClipboardData(CF_UNICODETEXT);
+        let out = if h.is_null() {
+            None
+        } else {
+            let p = GlobalLock(h) as *const u16;
+            if p.is_null() {
+                None
+            } else {
+                let mut n = 0;
+                while *p.add(n) != 0 {
+                    n += 1;
+                }
+                let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+                GlobalUnlock(h);
+                Some(s)
+            }
+        };
+        CloseClipboard();
+        out
+    }
+}
+
 /// Opens an Explorer window with `path` selected (a folder is selected in its parent).
 pub fn reveal(path: &Path) -> Result<(), String> {
     let arg = format!("/select,\"{}\"", path.display());
@@ -89,37 +119,7 @@ mod tests {
     fn text_round_trips_through_the_clipboard_including_unicode() {
         let text = "C:\\Users\\Alanm\\Música\\canción - ñandú ✓.txt\r\nsegunda línea";
         copy_text(text).unwrap();
-        let back = read_text().expect("clipboard text");
+        let back = paste_text().expect("clipboard text");
         assert_eq!(back, text);
-    }
-
-    /// Reads the Unicode text on the clipboard (tests only).
-    fn read_text() -> Option<String> {
-        use windows_sys::Win32::System::DataExchange::GetClipboardData;
-        // SAFETY: the clipboard is opened for the read and closed again; the locked block is only read up to its NUL.
-        unsafe {
-            if OpenClipboard(std::ptr::null_mut()) == 0 {
-                return None;
-            }
-            let h = GetClipboardData(CF_UNICODETEXT);
-            let out = if h.is_null() {
-                None
-            } else {
-                let p = GlobalLock(h) as *const u16;
-                if p.is_null() {
-                    None
-                } else {
-                    let mut n = 0;
-                    while *p.add(n) != 0 {
-                        n += 1;
-                    }
-                    let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
-                    GlobalUnlock(h);
-                    Some(s)
-                }
-            };
-            CloseClipboard();
-            out
-        }
     }
 }
