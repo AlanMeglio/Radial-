@@ -677,8 +677,16 @@ unsafe extern "system" fn drag_enter(
     *effect = NONE;
     // Every file gets a menu: what it is decides which rings it has. Reading each file's first bytes is capped so a
     // drag of thousands of files opens at once; the rest are handled (and refused one by one) when the job runs.
+    // The first few are opened to look at their first bytes; the rest are judged by their names alone, so a drag of
+    // hundreds of files (on a network drive, say) never makes the menu wait for the disk.
+    const LOOK_INSIDE: usize = 20;
     const KINDS_CAP: usize = 200;
-    let kinds: Vec<SourceKind> = files.iter().take(KINDS_CAP).map(|f| engine::detect_any(f)).collect();
+    let kinds: Vec<SourceKind> = files
+        .iter()
+        .take(KINDS_CAP)
+        .enumerate()
+        .map(|(i, f)| if i < LOOK_INSIDE { engine::detect_any(f) } else { engine::detect_by_name(f) })
+        .collect();
     let Some(&kind) = kinds.first() else { return 0 };
     let cfg = crate::current_config();
     let opened = with(|o| {

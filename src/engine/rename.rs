@@ -757,7 +757,7 @@ pub fn apply(plan: &[Item]) -> Result<Undo> {
             }
         })
         .collect();
-    Ok(Undo { entries })
+    Ok(Undo { entries, created: Vec::new() })
 }
 
 // ================================================================================================ undo
@@ -776,6 +776,9 @@ pub struct UndoEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Undo {
     pub entries: Vec<UndoEntry>,
+    /// Folders the operation created (a sort makes its group folders); undoing removes them again if they are empty.
+    /// Folders that were already there are never listed, so they are never removed.
+    pub created: Vec<PathBuf>,
 }
 
 /// What an undo did: how many names came back and which entries were left alone, with a code (`missing`,
@@ -810,6 +813,9 @@ impl Undo {
                 e.modified
             ));
         }
+        for dir in &self.created {
+            text.push_str(&format!("C\t{}\n", dir.display()));
+        }
         // Names only ever grow, so a new file is always the newest and never the one pruned.
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let secs = undo_files(dir).first().map_or(now, |(newest, _)| now.max(newest + 1));
@@ -832,16 +838,7 @@ impl Undo {
 
     /// The newest `rename-<seconds>.txt` in `dir`.
     pub fn latest_in(dir: &Path) -> Option<PathBuf> {
-        std::fs::read_dir(dir)
-            .ok()?
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let n: u64 = name.strip_prefix("rename-")?.strip_suffix(".txt")?.parse().ok()?;
-                Some((n, e.path()))
-            })
-            .max_by_key(|(n, _)| *n)
-            .map(|(_, p)| p)
+        undo_files(dir).into_iter().next().map(|(_, p)| p)
     }
 
     pub fn load(file: &Path) -> Result<Undo> {
@@ -851,7 +848,12 @@ impl Undo {
             return Err(Error::Corrupt("not a rename undo file".into()));
         }
         let mut entries = Vec::new();
+        let mut created = Vec::new();
         for line in lines.filter(|l| !l.is_empty()) {
+            if let Some(dir) = line.strip_prefix("C\t") {
+                created.push(PathBuf::from(dir));
+                continue;
+            }
             let bad = || Error::Corrupt(format!("bad undo line: {line}"));
             let f: Vec<&str> = line.split('\t').collect();
             let [current, original, kind, len, modified] = f.as_slice() else { return Err(bad()) };
@@ -863,7 +865,7 @@ impl Undo {
                 modified: modified.parse().map_err(|_| bad())?,
             });
         }
-        Ok(Undo { entries })
+        Ok(Undo { entries, created })
     }
 }
 
@@ -926,6 +928,10 @@ pub fn undo_report(u: &Undo) -> Result<UndoReport> {
     let moves: Vec<(PathBuf, PathBuf)> = todo.iter().map(|e| (e.current.clone(), e.original.clone())).collect();
     execute(&moves)?;
     report.restored = moves.len();
+    // The folders the operation made go again, but only if nothing is left in them (`remove_dir` refuses those).
+    for dir in u.created.iter().rev() {
+        let _ = std::fs::remove_dir(dir);
+    }
     Ok(report)
 }
 

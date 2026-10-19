@@ -179,12 +179,18 @@ pub fn apply(plan: &Plan) -> Result<super::rename::Undo> {
         return Err(Error::Unsupported("nothing to sort".into()));
     }
     let made = make_folders(plan)?;
-    super::rename::apply(&ok).map_err(|e| {
-        for d in made.iter().rev() {
-            let _ = std::fs::remove_dir(d);
+    match super::rename::apply(&ok) {
+        Ok(mut undo) => {
+            undo.created = made;
+            Ok(undo)
         }
-        e
-    })
+        Err(e) => {
+            for d in made.iter().rev() {
+                let _ = std::fs::remove_dir(d);
+            }
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +269,7 @@ mod tests {
         super::super::rename::undo(&undo).unwrap();
         assert!(d.join("a.png").exists() && d.join("c.pdf").exists());
         assert!(!d.join("Images").join("a.png").exists());
+        assert!(!d.join("Images").exists() && !d.join("Documents").exists(), "the folders sorting made are gone again");
         let _ = std::fs::remove_dir_all(&d);
     }
 

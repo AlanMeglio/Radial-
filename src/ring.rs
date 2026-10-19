@@ -441,7 +441,16 @@ fn ring_ops(ring: RingKind, kinds: &[SourceKind], custom: &[Custom]) -> Vec<Op> 
 /// The rings these files have, in wheel order, given how many of the user's sectors apply. The files ring is always
 /// there, so there is always one.
 pub fn rings_with(kinds: &[SourceKind], custom: &[Custom]) -> Vec<RingKind> {
-    RingKind::ALL.into_iter().filter(|&r| !ring_ops(r, kinds, custom).is_empty() || r == RingKind::Files).collect()
+    RingKind::ALL.into_iter().filter(|&r| r == RingKind::Files || has_something_usable(r, kinds, custom)).collect()
+}
+
+/// Does the ring hold at least one sector that works for every dragged file? (A ring where every sector is greyed
+/// out only because the files are of different kinds is not worth showing.)
+fn has_something_usable(ring: RingKind, kinds: &[SourceKind], custom: &[Custom]) -> bool {
+    ring_ops(ring, kinds, custom).iter().any(|op| match op {
+        Op::Convert(t) => kinds.iter().all(|&k| supports(k, *t)),
+        _ => true,
+    })
 }
 
 /// `rings_with` for someone with no sectors of their own.
@@ -820,6 +829,19 @@ mod tests {
         );
         let with_zip = build(&[SourceKind::Pdf, SourceKind::Archive], RingKind::Documents, 2, &all_ok());
         assert!(!labels(&with_zip).contains(&"act-merge"), "an archive cannot be a page");
+    }
+
+    #[test]
+    fn a_mix_of_files_gets_only_the_rings_where_something_works_for_all_of_them() {
+        use RingKind::*;
+        assert_eq!(rings_for(&[PNG, SourceKind::Archive]), [Files], "nothing converts both a picture and a zip");
+        assert_eq!(rings_for(&[SourceKind::Other, PNG]), [Files]);
+        assert_eq!(rings_for(&[PNG, SourceKind::Pdf]), [Documents, Images, Tools, Files]);
+        assert_eq!(
+            rings_for(&[SourceKind::Csv, SourceKind::Text]),
+            [Documents, Images, Files],
+            "both can be a PDF or a picture"
+        );
     }
 
     #[test]

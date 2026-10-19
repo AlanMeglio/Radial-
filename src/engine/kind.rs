@@ -71,7 +71,11 @@ pub fn detect_head(ext: Option<&str>, head: &[u8]) -> Option<SourceKind> {
     if let Some(f) = sniff_image(head) {
         return Some(SourceKind::Image(f));
     }
-    if head.windows(5).take(HEAD_LEN).any(|w| w == b"%PDF-") && head.len() >= 5 {
+    // The header sits at the very start (after at most a BOM or a few blank bytes); a `.pdf` may have more junk first,
+    // but a source file that merely mentions "%PDF-" is not a PDF.
+    let start = head.iter().position(|b| !b.is_ascii_whitespace() && !matches!(b, 0xEF | 0xBB | 0xBF)).unwrap_or(0);
+    let pdf_at = head.windows(5).position(|w| w == b"%PDF-");
+    if pdf_at.is_some_and(|at| at <= start || (ext.as_deref() == Some("pdf") && at < HEAD_LEN)) {
         return Some(SourceKind::Pdf);
     }
     let zip = head.starts_with(b"PK\x03\x04");
@@ -110,13 +114,48 @@ pub fn detect(path: &Path) -> Option<SourceKind> {
     detect_head(path.extension().and_then(|e| e.to_str()), &head)
 }
 
-/// `detect`, but a directory is `Folder` and a file the engine does not convert is `Other` instead of nothing, so
-/// every drag gets a menu.
-pub fn detect_any(path: &Path) -> SourceKind {
+/// What a file probably is judging by its name alone, without opening it. Used for the bulk of a very large drag
+/// and for files that live in the cloud (reading them would download them).
+pub fn detect_by_name(path: &Path) -> SourceKind {
     if path.is_dir() {
         return SourceKind::Folder;
     }
-    detect(path).unwrap_or(SourceKind::Other)
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    match ext.as_str() {
+        "png" => SourceKind::Image(Fmt::Png),
+        "jpg" | "jpeg" => SourceKind::Image(Fmt::Jpg),
+        "webp" => SourceKind::Image(Fmt::Webp),
+        "gif" => SourceKind::Image(Fmt::Gif),
+        "bmp" => SourceKind::Image(Fmt::Bmp),
+        "tif" | "tiff" => SourceKind::Image(Fmt::Tiff),
+        "heic" | "heif" => SourceKind::Image(Fmt::Heic),
+        "avif" => SourceKind::Image(Fmt::Avif),
+        "pdf" => SourceKind::Pdf,
+        "docx" => SourceKind::Docx,
+        "xlsx" => SourceKind::Sheet,
+        "zip" => SourceKind::Archive,
+        e if CSV_EXTS.contains(&e) => SourceKind::Csv,
+        e if TEXT_EXTS.contains(&e) => SourceKind::Text,
+        _ => SourceKind::Other,
+    }
+}
+
+/// True for a file whose content is not on this machine (OneDrive "online only" and the like): opening it to look at
+/// its first bytes would download it.
+fn is_cloud_placeholder(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    // OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS
+    meta.file_attributes() & (0x1000 | 0x4_0000 | 0x40_0000) != 0
+}
+
+/// `detect`, but a directory is `Folder` and a file the engine does not convert is `Other` instead of nothing, so
+/// every drag gets a menu.
+pub fn detect_any(path: &Path) -> SourceKind {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => SourceKind::Folder,
+        Ok(m) if is_cloud_placeholder(&m) => detect_by_name(path),
+        _ => detect(path).unwrap_or(SourceKind::Other),
+    }
 }
 
 /// Can the pipeline turn `kind` into `to`? Mirrors `convert_bytes`; a unit test keeps the two in step.
@@ -220,6 +259,37 @@ mod tests {
         assert_eq!(detect_head(Some("tsv"), b"a\tb\n"), Some(SourceKind::Csv));
         assert_eq!(detect_head(Some("json"), b"{\"a\":1}"), Some(SourceKind::Text));
         assert_eq!(detect_head(Some("csv"), b"a,\0b"), None, "binary bytes are not text");
+    }
+
+    #[test]
+    fn a_source_file_that_mentions_the_pdf_header_is_not_a_pdf() {
+        assert_eq!(detect_head(Some("rs"), b"// the header is %PDF-1.7 followed by...\nfn main() {}"), None);
+        assert_eq!(
+            detect_head(Some("txt"), b"see %PDF- inside the text here, long long line to push it out of range"),
+            Some(SourceKind::Text)
+        );
+        let mut junk = vec![b'x'; 100];
+        junk.extend_from_slice(b"%PDF-1.4");
+        assert_eq!(detect_head(Some("pdf"), &junk), Some(SourceKind::Pdf), "a .pdf may start with junk");
+        assert_eq!(detect_head(Some("bin"), &junk), None, "something else may not");
+    }
+
+    #[test]
+    fn the_name_alone_is_enough_to_classify_a_big_drag() {
+        for (name, want) in [
+            ("a.PNG", SourceKind::Image(Fmt::Png)),
+            ("a.jpeg", SourceKind::Image(Fmt::Jpg)),
+            ("a.pdf", SourceKind::Pdf),
+            ("a.docx", SourceKind::Docx),
+            ("a.xlsx", SourceKind::Sheet),
+            ("a.tsv", SourceKind::Csv),
+            ("a.md", SourceKind::Text),
+            ("a.zip", SourceKind::Archive),
+            ("a.ogg", SourceKind::Other),
+            ("noext", SourceKind::Other),
+        ] {
+            assert_eq!(detect_by_name(Path::new(name)), want, "{name}");
+        }
     }
 
     #[test]

@@ -41,7 +41,7 @@ pub mod zip;
 #[allow(unused_imports)] // re-exported for the UI layer
 pub use error::{Error, Result};
 #[allow(unused_imports)]
-pub use kind::{detect, detect_any, detect_head, supports, SourceKind, Target};
+pub use kind::{detect, detect_any, detect_by_name, detect_head, supports, SourceKind, Target};
 #[allow(unused_imports)]
 pub use os::Availability;
 #[allow(unused_imports)]

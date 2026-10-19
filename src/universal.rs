@@ -263,6 +263,7 @@ fn sort(
         moved += done.entries.len();
         folders += plan.groups.len();
         undo.entries.extend(done.entries);
+        undo.created.extend(done.created);
     }
     let saved = save(&undo);
     let mut text = fill(tr(l, "sort-done"), &[&moved.to_string(), &folders.to_string()]);
