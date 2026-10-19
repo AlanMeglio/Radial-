@@ -133,6 +133,16 @@ fn table_pdf(title: &str, rows: &[Vec<String>]) -> Result<Vec<u8>> {
     Ok(table_to_pdf(title, rows))
 }
 
+/// The delimiter of the CSV files made here: the user's own list separator, so Excel opens them in columns. (Tests
+/// pin it to a comma so they do not depend on the machine.)
+fn csv_delimiter() -> char {
+    if cfg!(test) {
+        ','
+    } else {
+        os::list_separator()
+    }
+}
+
 /// What a worksheet's name adds to the output file name: nothing for a single sheet, `-Name` otherwise.
 fn sheet_suffix(sheets: &[Sheet], i: usize) -> String {
     if sheets.len() < 2 {
@@ -183,7 +193,9 @@ fn sheet_to(input: &[u8], to: Target, opts: &ConvertOptions) -> Result<Vec<Artif
     for (i, sheet) in sheets.iter().enumerate() {
         let suffix = sheet_suffix(&sheets, i);
         match to {
-            Target::Csv => out.push(Artifact { suffix, ext: "csv", data: xlsx::csv_bytes(&sheet.rows) }),
+            Target::Csv => {
+                out.push(Artifact { suffix, ext: "csv", data: xlsx::csv_bytes_with(&sheet.rows, csv_delimiter()) })
+            }
             Target::Pdf => out.push(Artifact { suffix, ext: "pdf", data: table_pdf(&sheet.name, &sheet.rows)? }),
             Target::Image(dst) => {
                 let pages = pdf_to_images(&table_pdf(&sheet.name, &sheet.rows)?, dst, opts)?;

@@ -570,7 +570,13 @@ fn unsupported_cells(limit: usize) -> Error {
     Error::Unsupported(format!("Workbook too large: more than {grouped} cells"))
 }
 
+/// Most characters of cell text a workbook may hold in memory at once: the cell count alone does not bound it, since
+/// one 32,767 character string can be referenced by a million cells.
+const MAX_TEXT: usize = 256 << 20;
+
 struct Ctx<'a> {
+    /// Characters of cell text still allowed.
+    text_left: std::cell::Cell<usize>,
     max_cells: usize,
     shared: &'a Shared,
     styles: &'a [NumKind],
@@ -694,6 +700,11 @@ fn parse_sheet(xml: &str, ctx: &Ctx, left: &mut usize) -> Result<Vec<Vec<String>
                     *left -= add;
                     r.resize(col + 1, String::new());
                 }
+                let n = text.len();
+                if n > ctx.text_left.get() {
+                    return Err(Error::Unsupported("Workbook too large: it holds too much text".into()));
+                }
+                ctx.text_left.set(ctx.text_left.get() - n);
                 r[col] = text;
             }
             _ => {}
@@ -786,7 +797,7 @@ fn read_with(bytes: &[u8], max_part: usize, max_cells: usize) -> Result<Vec<Shee
     let shared = part("xl/sharedStrings.xml")?
         .map(|x| parse_shared(&x))
         .unwrap_or(Shared { buf: String::new(), spans: Vec::new() });
-    let ctx = Ctx { max_cells, shared: &shared, styles: &styles, d1904 };
+    let ctx = Ctx { text_left: std::cell::Cell::new(MAX_TEXT), max_cells, shared: &shared, styles: &styles, d1904 };
     let mut left = max_cells;
     let mut sheets = Vec::with_capacity(entries.len());
     for (name, path) in entries {
@@ -815,25 +826,50 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<Vec<Sheet>> {
 
 // ------------------------------------------------------------------------------------------------ CSV
 
-fn needs_quotes(f: &str) -> bool {
-    f.bytes().any(|b| matches!(b, b',' | b'"' | b'\r' | b'\n'))
+fn needs_quotes(f: &str, delim: char) -> bool {
+    f.chars().any(|c| c == delim || matches!(c, '"' | '\r' | '\n'))
 }
 
-/// Encodes rows as CSV: UTF-8 with a BOM (Excel opens it correctly), `,` separated, CRLF line ends, RFC 4180
-/// quoting only where needed.
+/// A cell that starts like a formula would be run by Excel when the CSV is opened (`=cmd|...`, `@SUM(...)`, `+1+1`).
+/// Such a cell gets a leading apostrophe, which Excel shows as text; numbers (`-5`, `+3`) are left alone.
+fn formula_safe(f: &str) -> std::borrow::Cow<'_, str> {
+    let risky = match f.chars().next() {
+        Some('=' | '@' | '\t' | '\r') => true,
+        Some('+' | '-') => f.parse::<f64>().is_err(),
+        _ => false,
+    };
+    if risky {
+        std::borrow::Cow::Owned(format!("'{f}"))
+    } else {
+        std::borrow::Cow::Borrowed(f)
+    }
+}
+
+/// Encodes rows as CSV with `,` between cells (see [`csv_bytes_with`]).
+#[cfg(test)]
 pub fn csv_bytes(rows: &[Vec<String>]) -> Vec<u8> {
+    csv_bytes_with(rows, ',')
+}
+
+/// Encodes rows as CSV: UTF-8 with a BOM, `delim` between cells, CRLF line ends, RFC 4180 quoting only where needed.
+///
+/// Excel splits a CSV on the *list separator of the user's Windows* (`;` in much of Europe and Latin America), not on
+/// `,`: pass that one (`os::list_separator`) and the file opens in columns. A cell that starts like a formula gets a
+/// leading apostrophe so opening the file cannot run it.
+pub fn csv_bytes_with(rows: &[Vec<String>], delim: char) -> Vec<u8> {
     let mut out = String::from("\u{FEFF}");
     for r in rows {
         for (i, f) in r.iter().enumerate() {
             if i > 0 {
-                out.push(',');
+                out.push(delim);
             }
-            if needs_quotes(f) {
+            let f = formula_safe(f);
+            if needs_quotes(&f, delim) {
                 out.push('"');
                 out.push_str(&f.replace('"', "\"\""));
                 out.push('"');
             } else {
-                out.push_str(f);
+                out.push_str(&f);
             }
         }
         out.push_str("\r\n");
@@ -1784,7 +1820,7 @@ mod tests {
             grid(&[&["a", "b", "c"], &["1", "2", "3"]]),
             grid(&[&["he said \"hi\"", "x,y", "line1\nline2"], &["", "", ""], &["ñ", "日本", "\u{1F600}"]]),
             grid(&[&["a", "b"], &["only"], &["1", "2", "3"]]),
-            grid(&[&["lead ", " space", "\ttab"], &["a;b", "c|d", "e"]]),
+            grid(&[&["lead ", " space", "mid\ttab"], &["a;b", "c|d", "e"]]),
             grid(&[&["x"], &[""], &["y"]]),
         ];
         for rows in cases {
@@ -2158,5 +2194,72 @@ mod tests {
         let back = parse_csv(std::str::from_utf8(&csv).unwrap());
         println!("parse_csv: {:?} ({} rows)", t.elapsed(), back.len());
         assert_eq!(back.len(), rows.len());
+    }
+
+    #[test]
+    fn one_long_string_shared_by_many_cells_cannot_exhaust_memory() {
+        // 32,767 characters referenced by 8,200 cells would be 268 MB of text from a few KB of file.
+        let ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let mut zip = ZipWriter::new();
+        zip.add(
+            "xl/workbook.xml",
+            format!("<workbook xmlns=\"{ns}\" xmlns:r=\"{rel}\"><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>").as_bytes(),
+            true,
+        );
+        zip.add(
+            "xl/_rels/workbook.xml.rels",
+            format!("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{rel}/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>").as_bytes(),
+            true,
+        );
+        zip.add(
+            "xl/sharedStrings.xml",
+            format!("<sst xmlns=\"{ns}\"><si><t>{}</t></si></sst>", "x".repeat(32_767)).as_bytes(),
+            true,
+        );
+        let mut sheet = format!("<worksheet xmlns=\"{ns}\"><sheetData>");
+        for r in 1..=8_200 {
+            sheet += &format!("<row r=\"{r}\"><c r=\"A{r}\" t=\"s\"><v>0</v></c></row>");
+        }
+        sheet += "</sheetData></worksheet>";
+        zip.add("xl/worksheets/sheet1.xml", sheet.as_bytes(), true);
+        match read_xlsx(&zip.finish()) {
+            Err(Error::Unsupported(m)) => assert!(m.contains("too much text"), "{m}"),
+            other => panic!("expected the text budget to refuse it, got {:?}", other.map(|s| s.len())),
+        }
+    }
+
+    #[test]
+    fn csv_uses_the_delimiter_it_is_given_and_quotes_only_what_that_delimiter_needs() {
+        let rows = vec![vec!["a,b".to_string(), "c;d".to_string(), "e".to_string()]];
+        assert_eq!(String::from_utf8(csv_bytes_with(&rows, ';')).unwrap(), "\u{FEFF}a,b;\"c;d\";e\r\n");
+        assert_eq!(String::from_utf8(csv_bytes_with(&rows, ',')).unwrap(), "\u{FEFF}\"a,b\",c;d,e\r\n");
+        assert_eq!(csv_bytes(&rows), csv_bytes_with(&rows, ','));
+        // Either delimiter reads back (two rows give the sniffer a consistent column count to see).
+        let grid =
+            vec![vec!["a".to_string(), "c d".to_string(), "e".to_string()], vec!["1".into(), "2".into(), "3".into()]];
+        for d in [',', ';', '\t'] {
+            let back = parse_csv(&String::from_utf8(csv_bytes_with(&grid, d)).unwrap());
+            assert_eq!(back, grid, "delimiter {d:?}");
+        }
+    }
+
+    #[test]
+    fn cells_that_look_like_formulas_cannot_run_when_the_csv_is_opened_in_excel() {
+        let row = |c: &str| vec![vec![c.to_string()]];
+        for (cell, want) in [
+            ("=1+1", "'=1+1"),
+            ("@SUM(A1)", "'@SUM(A1)"),
+            ("+cmd|' /C calc'!A0", "'+cmd|' /C calc'!A0"),
+            ("-2+3", "'-2+3"),
+            ("\tx", "'\tx"),
+        ] {
+            let text = String::from_utf8(csv_bytes(&row(cell))).unwrap();
+            assert!(text.contains(want), "{cell:?} -> {text:?}");
+        }
+        for plain in ["-5", "+3", "-0.5", "1e5", "hello", "a=b", "5-3", ""] {
+            let text = String::from_utf8(csv_bytes(&row(plain))).unwrap();
+            assert_eq!(text, format!("{}{plain}\r\n", '\u{FEFF}'), "{plain:?} stays as it is");
+        }
     }
 }

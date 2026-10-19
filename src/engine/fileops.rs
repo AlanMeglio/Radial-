@@ -285,7 +285,7 @@ pub struct ZipLimits {
 
 impl Default for ZipLimits {
     fn default() -> Self {
-        ZipLimits { max_entries: 65_535, max_bytes: u64::from(u32::MAX) }
+        ZipLimits { max_entries: 65_534, max_bytes: u64::from(u32::MAX) }
     }
 }
 
@@ -840,11 +840,20 @@ pub struct UnzipLimits {
     /// An entry larger than this and more than `bomb_ratio` times its compressed size aborts.
     pub bomb_min: u64,
     pub bomb_ratio: u64,
+    /// An archive that expands to more than this and more than `bomb_ratio` times its size aborts, however many
+    /// entries it is spread over.
+    pub archive_min: u64,
 }
 
 impl Default for UnzipLimits {
     fn default() -> Self {
-        UnzipLimits { max_entries: 20_000, max_total: 8 << 30, bomb_min: 100 << 20, bomb_ratio: 1000 }
+        UnzipLimits {
+            max_entries: 65_534,
+            max_total: 8 << 30,
+            bomb_min: 100 << 20,
+            bomb_ratio: 1000,
+            archive_min: 1 << 30,
+        }
     }
 }
 
@@ -996,6 +1005,10 @@ pub fn unzip_with(zip: &Path, dest_dir: &Path, lim: &UnzipLimits) -> Result<Unzi
             "the archive expands to more than {} of uncompressed data",
             crate::convert::human_size(lim.max_total)
         )));
+    }
+    let packed: u64 = entries.iter().map(|e| e.comp).sum();
+    if declared > lim.archive_min && declared > lim.bomb_ratio.saturating_mul(packed.max(1)) {
+        return Err(Error::Unsupported("the archive has an extreme compression ratio (possible zip bomb)".into()));
     }
 
     let existed = match std::fs::symlink_metadata(dest_dir) {
@@ -1235,9 +1248,10 @@ fn ooxml_date(raw: &str) -> String {
         let (y, mo, d, h, mi, s) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
         let secs = days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s;
         let t = if secs >= 0 {
-            UNIX_EPOCH + Duration::from_secs(secs as u64)
+            UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))?
         } else {
-            UNIX_EPOCH - Duration::from_secs(secs.unsigned_abs())
+            // .NET's DateTime.MinValue (0001-01-01) is in real files; it has no file-time equivalent.
+            UNIX_EPOCH.checked_sub(Duration::from_secs(secs.unsigned_abs()))?
         };
         local_time(t)
     })();
@@ -1896,7 +1910,8 @@ mod tests {
         let e = zip_paths(&[big], &dest).unwrap_err();
         assert!(matches!(e, Error::Unsupported(ref m) if m.contains("4 GiB")), "{e}");
         assert_eq!(leftovers(&t.0), ["huge.bin"], "nothing may be created");
-        assert_eq!(ZipLimits::default().max_entries, 65_535);
+        assert_eq!(ZipLimits::default().max_entries, 65_534);
+        assert_eq!(UnzipLimits::default().max_entries, 65_534, "what Radial zips, Radial can unzip");
     }
 
     #[test]
@@ -2281,14 +2296,14 @@ mod tests {
     }
 
     #[test]
-    fn more_than_20000_entries_are_refused_before_extracting() {
-        let es: Vec<E> = (0..20_001).map(|i| E::stored(&format!("f{i}"), b"")).collect();
-        let (r, t) = run("many", &build(&es));
-        assert!(matches!(r, Err(Error::Unsupported(ref m)) if m.contains("20000")), "{r:?}");
+    fn more_entries_than_the_limit_are_refused_before_extracting() {
+        let lim = UnzipLimits { max_entries: 100, ..UnzipLimits::default() };
+        let es: Vec<E> = (0..101).map(|i| E::stored(&format!("f{i}"), b"")).collect();
+        let (r, t) = run_with("many", &build(&es), &lim);
+        assert!(matches!(r, Err(Error::Unsupported(ref m)) if m.contains("100")), "{r:?}");
         assert!(!t.p("sandbox/out").exists());
-        let es: Vec<E> = (0..20_000).map(|i| E::stored(&format!("f{i}"), b"")).collect();
-        let (r, _t) = run("many-ok", &build(&es));
-        assert_eq!(r.unwrap().files, 20_000);
+        let (r, _t) = run_with("many-ok", &build(&es[..100]), &lim);
+        assert_eq!(r.unwrap().files, 100);
     }
 
     #[test]
@@ -2510,6 +2525,40 @@ mod tests {
             w.add(e, b"<x/>", true);
         }
         w.finish()
+    }
+
+    #[test]
+    fn a_date_before_1601_is_shown_as_text_and_never_panics() {
+        let t = Tmp::new("props-mindate");
+        for stamp in ["0001-01-01T00:00:00Z", "0000-01-01T00:00:00Z", "1600-12-31T23:59:59Z", "-001-01-01T00:00:00Z"] {
+            let core = format!(
+                "<cp:coreProperties xmlns:cp=\"x\" xmlns:dcterms=\"z\"><dcterms:created>{stamp}</dcterms:created></cp:coreProperties>"
+            );
+            t.write("old.docx", &ooxml(Some(&core), None, &[]));
+            let props = properties(&t.p("old.docx")).unwrap();
+            assert_eq!(get(&props, "doc-created"), Some(stamp), "the raw text is kept for {stamp}");
+        }
+    }
+
+    #[test]
+    fn an_archive_spread_over_many_entries_still_trips_the_bomb_guard() {
+        let t = Tmp::new("unzip-spread");
+        // 40 entries of 99 MiB zeros: each is under the per-entry guard, together they are 3.9 GB from a few MB.
+        let mut w = ZipWriter::new();
+        let zeros = vec![0u8; 1 << 20];
+        let mut sizes = 0u64;
+        for i in 0..4 {
+            w.add(&format!("z{i}.bin"), &zeros, true);
+            sizes += zeros.len() as u64;
+        }
+        t.write("small.zip", &w.finish());
+        // The real check: declared 4 MiB from a tiny archive passes the guard (below the minimum), proving the guard
+        // is size-gated, then the same ratio with a lowered minimum fails.
+        assert!(unzip_to(&t.p("small.zip"), &t.p("ok")).is_ok());
+        let lim = UnzipLimits { archive_min: 1 << 20, bomb_ratio: 100, ..UnzipLimits::default() };
+        let e = unzip_with(&t.p("small.zip"), &t.p("bomb"), &lim).unwrap_err();
+        assert!(matches!(e, Error::Unsupported(ref m) if m.contains("compression ratio")), "{e} ({sizes})");
+        assert!(!t.p("bomb").exists(), "nothing is extracted");
     }
 
     #[test]

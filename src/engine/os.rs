@@ -297,6 +297,25 @@ pub fn encode_with_wic(img: &RgbaImage, fmt: Fmt) -> Result<Vec<u8>> {
     })
 }
 
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetLocaleInfoEx(name: *const u16, lctype: u32, data: *mut u16, cch: i32) -> i32;
+}
+
+/// The character the user's Windows puts between the cells of a CSV (Settings > Region > list separator): `;` in
+/// most of Europe and Latin America, `,` elsewhere, tab when that is what they chose. Excel splits on it.
+pub fn list_separator() -> char {
+    const LOCALE_SLIST: u32 = 0x0C;
+    let mut buf = [0u16; 8];
+    // SAFETY: a null locale name means the user's default; the buffer length is passed and the result is NUL terminated.
+    let n = unsafe { GetLocaleInfoEx(std::ptr::null(), LOCALE_SLIST, buf.as_mut_ptr(), buf.len() as i32) };
+    match String::from_utf16_lossy(&buf[..(n.max(1) - 1) as usize]).as_str() {
+        ";" => ';',
+        "\t" => '\t',
+        _ => ',',
+    }
+}
+
 static HEIC_ENC: OnceLock<Availability> = OnceLock::new();
 static OCR: OnceLock<Availability> = OnceLock::new();
 
@@ -399,5 +418,10 @@ mod tests {
         } else {
             assert!(matches!(encode_with_wic(&RgbaImage::new(4, 4), Fmt::Heic), Err(Error::Unavailable { .. })));
         }
+    }
+
+    #[test]
+    fn the_list_separator_is_one_of_the_three_excel_understands() {
+        assert!([',', ';', '\t'].contains(&list_separator()));
     }
 }
