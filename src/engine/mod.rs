@@ -1,6 +1,6 @@
 //! Conversion and action engine: pure, blocking, `Send` library code with no UI.
 //!
-//! * Menus: `detect` (content first, extension second) and `targets_for` give the sectors of the radial menu.
+//! * Menus: `detect` (content first, extension second) and `supports` say which conversions a file has.
 //! * Conversions: `convert_file` / `convert_bytes` cover image, PDF, DOCX and text pairs.
 //! * Actions: `compress`, `meta`, `edit`, `annotate`, `background`, `crop`, `redact`, with file-level
 //!   wrappers in `actions`.
@@ -38,11 +38,13 @@ pub mod zip;
 #[allow(unused_imports)] // re-exported for the UI layer
 pub use error::{Error, Result};
 #[allow(unused_imports)]
-pub use kind::{detect, detect_any, detect_head, supports, targets_for, SourceKind, Target};
+pub use kind::{detect, detect_any, detect_head, supports, SourceKind, Target};
 #[allow(unused_imports)]
 pub use os::Availability;
 #[allow(unused_imports)]
-pub use pipeline::{convert_bytes, convert_file, source_availability, target_availability, Artifact, ConvertOptions};
+pub use pipeline::{
+    convert_bytes, convert_file, pair_availability, source_availability, target_availability, Artifact, ConvertOptions,
+};
 
 /// Probes the Windows codecs (HEIC/AVIF) on a background thread so the first menu does not wait for them.
 /// Runs once per process; the app calls it when the first menu starts to appear, so an idle tray process never

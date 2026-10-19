@@ -45,17 +45,21 @@ pub fn reason_text(r: &Reason, lang: Lang) -> String {
         Reason::OneFile => tr(lang, "why-one-file").to_string(),
         Reason::Formats(list) => fill(tr(lang, "why-formats"), &[list]),
         Reason::NoPath => tr(lang, "why-no-path").to_string(),
+        Reason::FilesOnly => tr(lang, "why-files-only").to_string(),
     }
 }
 
-/// "Wheel, Tab or hub: images" - how to reach the next ring and what it is.
+/// "Wheel, Tab or hub: images" - how to reach the next ring and what it is. Empty when the files have one ring.
 pub fn switch_hint(menu: &Menu, switch: Switch, lang: Lang) -> String {
+    if !menu.switchable() {
+        return String::new();
+    }
     let how = match switch {
         Switch::Both => tr(lang, "sw-both"),
         Switch::Tab => tr(lang, "sw-tab"),
         Switch::Hub => tr(lang, "sw-hub"),
     };
-    fill(tr(lang, "go-next"), &[how, tr(lang, menu.kind.step(1).name_key())])
+    fill(tr(lang, "go-next"), &[how, tr(lang, menu.neighbour(1).name_key())])
 }
 
 /// Hub texts while nothing is hovered. `size` is the human readable size of the file (or the file count).
@@ -67,6 +71,10 @@ pub fn idle(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: Lan
         (_, SourceKind::Pdf) => (size.to_string(), "PDF".to_string()),
         (_, SourceKind::Docx) => (size.to_string(), "DOCX".to_string()),
         (_, SourceKind::Text) => (size.to_string(), "TXT".to_string()),
+        (_, SourceKind::Sheet) => (size.to_string(), "XLSX".to_string()),
+        (_, SourceKind::Csv) => (size.to_string(), "CSV".to_string()),
+        (_, SourceKind::Archive) => (size.to_string(), "ZIP".to_string()),
+        (_, SourceKind::Folder) => (size.to_string(), tr(lang, "kind-folder").to_uppercase()),
         (_, SourceKind::Other) => (size.to_string(), "FILE".to_string()),
     };
     Texts { main, sub, caption, accent: false }
@@ -99,7 +107,7 @@ pub fn scene(kind: SourceKind, menu: &Menu, size: &str, switch: Switch, lang: La
     let t = idle(kind, menu, size, switch, lang);
     let mut sc = Scene::new(slots(menu, lang), t.main, t.sub);
     sc.caption = t.caption;
-    sc.pager = Some((menu.kind.index(), RingKind::ALL.len()));
+    sc.pager = menu.switchable().then(|| menu.position());
     sc
 }
 
@@ -120,7 +128,7 @@ mod tests {
 
     fn env() -> Env<'static> {
         Env {
-            target: &|t| match t {
+            target: &|_, t| match t {
                 Target::Image(Fmt::Avif) => Availability::Unavailable("AVIF needs an AV1 encoder".into()),
                 _ => Availability::Available,
             },
@@ -129,7 +137,7 @@ mod tests {
     }
 
     fn png_menu(ring: RingKind) -> Menu {
-        build(SourceKind::Image(Fmt::Png), ring, 1, &env())
+        build(&[SourceKind::Image(Fmt::Png)], ring, 1, &env())
     }
 
     #[test]
@@ -156,15 +164,16 @@ mod tests {
         let t = idle(SourceKind::Image(Fmt::Png), &m, "1.1 MB", Switch::Both, Lang::En);
         assert_eq!((t.main.as_str(), t.sub.as_str()), ("PNG", "1.1 MB"));
         assert_eq!(t.caption, "Wheel, Tab or hub: actions");
-        let pdf = build(SourceKind::Pdf, RingKind::Documents, 1, &env());
+        let pdf = build(&[SourceKind::Pdf], RingKind::Documents, 1, &env());
         let t = idle(SourceKind::Pdf, &pdf, "1.1 MB", Switch::Both, Lang::En);
         assert_eq!(
             (t.main.as_str(), t.sub.as_str(), t.caption.as_str()),
             ("1.1 MB", "PDF", "Wheel, Tab or hub: images")
         );
-        let other = build(SourceKind::Other, RingKind::Documents, 1, &env());
+        let other = build(&[SourceKind::Other], RingKind::Documents, 1, &env());
         let t = idle(SourceKind::Other, &other, "3 KB", Switch::Both, Lang::En);
-        assert_eq!((t.main.as_str(), t.sub.as_str()), ("3 KB", "FILE"));
+        assert_eq!((t.main.as_str(), t.sub.as_str()), ("Actions", "3 KB"), "an unknown file has the actions ring only");
+        assert_eq!(t.caption, "", "one ring: nothing to switch to");
     }
 
     #[test]
@@ -195,9 +204,9 @@ mod tests {
 
     #[test]
     fn dialog_actions_on_many_files_say_why_in_the_pill() {
-        let m = build(SourceKind::Image(Fmt::Png), RingKind::Actions, 2, &env());
+        let m = build(&[SourceKind::Image(Fmt::Png); 2], RingKind::Actions, 2, &env());
         assert_eq!(hover(&m, 5, Switch::Both, Lang::En).caption, "Drop a single image to use this");
-        let bmp = build(SourceKind::Image(Fmt::Bmp), RingKind::Actions, 1, &env());
+        let bmp = build(&[SourceKind::Image(Fmt::Bmp)], RingKind::Actions, 1, &env());
         assert_eq!(hover(&bmp, 0, Switch::Both, Lang::En).caption, "Works on JPG, PNG, WEBP only");
     }
 
@@ -208,7 +217,7 @@ mod tests {
         assert_eq!(sc.slots.len(), 7);
         assert_eq!(sc.pager, Some((2, 3)));
         assert_eq!((sc.main.as_str(), sc.sub.as_str()), ("Actions", "2 KB"));
-        let doc = build(SourceKind::Docx, RingKind::Documents, 1, &env());
+        let doc = build(&[SourceKind::Docx], RingKind::Documents, 1, &env());
         assert_eq!(scene(SourceKind::Docx, &doc, "9 KB", Switch::Both, Lang::En).pager, Some((0, 3)));
     }
 }

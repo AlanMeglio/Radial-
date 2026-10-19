@@ -163,7 +163,7 @@ pub fn render_pdf_pages(pdf: &[u8], pages: &[u32], dpi: u32, max_pixels: u64) ->
 
 /// Recognises the text of a picture with the OCR engine built into Windows (your profile languages).
 /// Must run on an MTA thread, e.g. inside the `render_pdf_each` callback.
-fn ocr_bitmap(img: &RgbaImage) -> Result<String> {
+pub fn ocr_bitmap(img: &RgbaImage) -> Result<String> {
     use windows::Media::Ocr::OcrEngine;
     let unavailable = |reason: String| Error::Unavailable { feature: "OCR", reason };
     let engine = OcrEngine::TryCreateFromUserProfileLanguages()
@@ -291,6 +291,20 @@ pub fn encode_with_wic(img: &RgbaImage, fmt: Fmt) -> Result<Vec<u8>> {
 }
 
 static HEIC_ENC: OnceLock<Availability> = OnceLock::new();
+static OCR: OnceLock<Availability> = OnceLock::new();
+
+/// Can this machine read text out of pictures? Needs a Windows OCR language for the user's profile languages.
+/// (Probed once per process.)
+pub fn can_ocr() -> Availability {
+    OCR.get_or_init(|| {
+        let ok = on_mta(|| Ok(windows::Media::Ocr::OcrEngine::TryCreateFromUserProfileLanguages().is_ok()));
+        match ok {
+            Ok(true) => Availability::Available,
+            _ => Availability::Unavailable("Windows has no OCR language pack for your profile languages".into()),
+        }
+    })
+    .clone()
+}
 static DECODE: OnceLock<(Availability, Availability)> = OnceLock::new();
 
 /// Can this machine read `fmt` right now? (Probed once per process.)

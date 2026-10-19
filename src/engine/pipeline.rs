@@ -56,9 +56,19 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
         SourceKind::Pdf => "PDF",
         SourceKind::Docx => "DOCX",
         SourceKind::Text => "text",
+        SourceKind::Sheet => "XLSX",
+        SourceKind::Csv => "CSV",
+        SourceKind::Archive => "ZIP",
+        SourceKind::Folder => "a folder",
         SourceKind::Other => "this kind of file",
     };
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
+}
+
+/// The PDF that the text of a Word or text file makes.
+fn text_pdf(input: &[u8], kind: SourceKind) -> Result<Vec<u8>> {
+    let text = if kind == SourceKind::Docx { docx::docx_to_text(input)? } else { decode_text(input)? };
+    Ok(text_to_pdf(&text))
 }
 
 /// Converts in memory. `kind` is what `kind::detect` said about `input`.
@@ -104,9 +114,17 @@ pub fn convert_bytes(input: &[u8], kind: SourceKind, to: Target, opts: &ConvertO
             one("txt", text.into_bytes())
         }
         (SourceKind::Pdf, Target::Docx) => pdf_to_docx(input),
+        (SourceKind::Image(_), Target::Txt) => {
+            let text = os::ocr_bitmap(&raster::decode(input)?.to_rgba8())?;
+            if text.trim().is_empty() {
+                return Err(Error::Unsupported("no text could be found in this picture".into()));
+            }
+            one("txt", text.trim().replace("\r\n", "\n").into_bytes())
+        }
         (SourceKind::Docx, Target::Txt) => one("txt", docx::docx_to_text(input)?.into_bytes()),
-        (SourceKind::Docx, Target::Pdf) => one("pdf", text_to_pdf(&docx::docx_to_text(input)?)),
-        (SourceKind::Text, Target::Pdf) => one("pdf", text_to_pdf(&decode_text(input)?)),
+        (SourceKind::Docx | SourceKind::Text, Target::Pdf) => one("pdf", text_pdf(input, kind)?),
+        // Documents reach pictures through the PDF their text makes.
+        (SourceKind::Docx | SourceKind::Text, Target::Image(dst)) => pdf_to_images(&text_pdf(input, kind)?, dst, opts),
         (SourceKind::Text, Target::Docx) => one("docx", docx::text_to_docx(&decode_text(input)?)),
         _ => Err(unsupported(kind, to)),
     }
@@ -189,6 +207,15 @@ pub fn target_availability(to: Target) -> Availability {
     }
 }
 
+/// Can this machine turn `kind` into `to`? Adds what depends on both ends: reading text out of a picture needs a
+/// Windows OCR language.
+pub fn pair_availability(kind: SourceKind, to: Target) -> Availability {
+    match (kind, to) {
+        (SourceKind::Image(_), Target::Txt) => os::can_ocr(),
+        _ => target_availability(to),
+    }
+}
+
 /// Can this machine read `kind`?
 pub fn source_availability(kind: SourceKind) -> Availability {
     match kind {
@@ -235,7 +262,7 @@ pub fn decode_text(bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::super::error::Error;
-    use super::super::kind::{detect, targets_for};
+    use super::super::kind::{detect, supports};
     use super::super::raster::{self, testutil::*};
     use super::super::zip::ZipArchive;
     use super::super::{docx, os, pdfread, pdfwrite};
@@ -407,53 +434,100 @@ mod tests {
     #[test]
     fn impossible_pairs_are_unsupported_errors() {
         for (kind, to) in [
-            (SourceKind::Text, Target::Image(Fmt::Png)),
             (SourceKind::Pdf, Target::Pdf),
-            (SourceKind::Docx, Target::Image(Fmt::Png)),
             (SourceKind::Text, Target::Txt),
+            (SourceKind::Docx, Target::Docx),
+            (SourceKind::Archive, Target::Pdf),
+            (SourceKind::Folder, Target::Txt),
+            (SourceKind::Other, Target::Image(Fmt::Png)),
         ] {
             assert!(matches!(run(b"x", kind, to), Err(Error::Unsupported(_))), "{kind:?} -> {to:?}");
         }
     }
 
-    #[test]
-    fn supports_agrees_with_what_the_pipeline_really_converts() {
-        let samples: Vec<(SourceKind, Vec<u8>)> = vec![
-            (SourceKind::Pdf, pdfwrite::text_to_pdf("menu test")),
-            (img_kind(Fmt::Png), png(&DynamicImage::ImageRgba8(rgba(32, 24)))),
-            (SourceKind::Docx, docx::text_to_docx("menu test")),
-            (SourceKind::Text, b"menu test".to_vec()),
-            (SourceKind::Other, vec![0, 1]),
-        ];
-        let targets = [Target::Image(Fmt::Png), Target::Image(Fmt::Jpg), Target::Pdf, Target::Docx, Target::Txt];
-        for (kind, bytes) in samples {
-            for t in targets {
-                let unsupported = matches!(run(&bytes, kind, t), Err(Error::Unsupported(_)));
-                assert_eq!(!unsupported, super::super::kind::supports(kind, t), "{kind:?} -> {t:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn every_menu_entry_is_wired() {
-        let samples: Vec<(SourceKind, Vec<u8>)> = vec![
+    /// One real sample of every kind the pipeline reads.
+    fn samples() -> Vec<(SourceKind, Vec<u8>)> {
+        vec![
             (SourceKind::Pdf, pdfwrite::text_to_pdf("menu test")),
             (img_kind(Fmt::Jpg), jpeg(&gradient(32, 24))),
             (img_kind(Fmt::Png), png(&DynamicImage::ImageRgba8(rgba(32, 24)))),
             (SourceKind::Docx, docx::text_to_docx("menu test")),
             (SourceKind::Text, b"menu test".to_vec()),
-        ];
-        for (kind, bytes) in samples {
-            for t in targets_for(kind) {
+            (SourceKind::Archive, vec![0, 1]),
+            (SourceKind::Folder, vec![]),
+            (SourceKind::Other, vec![0, 1]),
+        ]
+    }
+
+    const ALL_TARGETS: [Target; 7] = [
+        Target::Image(Fmt::Png),
+        Target::Image(Fmt::Jpg),
+        Target::Image(Fmt::Webp),
+        Target::Pdf,
+        Target::Docx,
+        Target::Txt,
+        Target::Csv,
+    ];
+
+    #[test]
+    fn supports_agrees_with_what_the_pipeline_really_converts() {
+        for (kind, bytes) in samples() {
+            for t in ALL_TARGETS.into_iter().chain([Target::Xlsx]) {
+                // Reading text out of a flat test picture finds none; that is OCR, not a missing conversion.
+                if matches!((kind, t), (SourceKind::Image(_), Target::Txt)) {
+                    continue;
+                }
+                let unsupported = matches!(run(&bytes, kind, t), Err(Error::Unsupported(_)));
+                assert_eq!(!unsupported, supports(kind, t), "{kind:?} -> {t:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_supported_pair_really_converts() {
+        for (kind, bytes) in samples() {
+            for t in ALL_TARGETS.into_iter().chain([Target::Xlsx]).filter(|t| supports(kind, *t)) {
+                if matches!((kind, t), (SourceKind::Image(_), Target::Txt)) {
+                    continue; // OCR needs text in the picture and a Windows language pack; covered below
+                }
                 match run(&bytes, kind, t) {
                     Ok(out) => assert!(!out.is_empty() && !out[0].data.is_empty(), "{kind:?} -> {t:?}"),
-                    Err(Error::Unavailable { .. }) => {
-                        assert!(matches!(t, Target::Image(Fmt::Heic | Fmt::Avif)), "{kind:?} -> {t:?}")
-                    }
                     Err(e) => panic!("{kind:?} -> {t:?}: {e}"),
                 }
             }
         }
+    }
+
+    #[test]
+    fn documents_become_pictures_through_a_pdf() {
+        let docx = docx::text_to_docx("Hello Radial");
+        let out = run(&docx, SourceKind::Docx, Target::Image(Fmt::Png)).unwrap();
+        let img = raster::decode(&out[0].data).unwrap();
+        assert!(img.width() > 100 && out[0].ext == "png");
+        let text = run(b"line one\nline two", SourceKind::Text, Target::Image(Fmt::Jpg)).unwrap();
+        assert_eq!(text[0].ext, "jpg");
+    }
+
+    #[test]
+    fn a_picture_with_text_reads_back_as_text_when_windows_has_an_ocr_language() {
+        if !os::can_ocr().is_available() {
+            eprintln!("no Windows OCR language here: skipping");
+            return;
+        }
+        // Render real text to a picture through the PDF path, then read it with OCR.
+        let pdf = pdfwrite::text_to_pdf("HELLO RADIAL OCR TEST");
+        let page = os::render_pdf_pages(&pdf, &[0], 200, MAX_PIXELS).unwrap().remove(0);
+        let png =
+            raster::encode(&DynamicImage::ImageRgba8(page), Fmt::Png, &EncodeOptions { jpeg_quality: 90 }).unwrap();
+        let mut out = run(&png, img_kind(Fmt::Png), Target::Txt).unwrap();
+        let text = String::from_utf8(out.remove(0).data).unwrap().to_uppercase();
+        assert!(text.contains("RADIAL"), "{text}");
+        let blank = png_flat();
+        assert!(matches!(run(&blank, img_kind(Fmt::Png), Target::Txt), Err(Error::Unsupported(_))));
+    }
+
+    fn png_flat() -> Vec<u8> {
+        png(&DynamicImage::ImageRgba8(rgba(64, 64)))
     }
 
     #[test]

@@ -43,6 +43,11 @@ pub enum Icon {
     Crop,
     Redact,
     Folder,
+    Zip,
+    Unzip,
+    Hash,
+    Copy,
+    Reveal,
 }
 
 impl Icon {
@@ -61,12 +66,17 @@ impl Icon {
             "DOCX" | "DOC" => Icon::Doc,
             "TXT" => Icon::Text,
             "COMPRESS" => Icon::Compress,
-            "METADATA" => Icon::Info,
+            "METADATA" | "INFO" => Icon::Info,
             "EDIT" => Icon::Pencil,
             "ANNOTATE" => Icon::Note,
             "ADD BG" => Icon::Frame,
             "CROP" => Icon::Crop,
             "REDACT" => Icon::Redact,
+            "ZIP" => Icon::Zip,
+            "UNZIP" => Icon::Unzip,
+            "SHA-256" => Icon::Hash,
+            "COPY PATH" => Icon::Copy,
+            "REVEAL" => Icon::Reveal,
             _ => Icon::Folder,
         }
     }
@@ -353,11 +363,16 @@ fn icon_source(i: Icon) -> String {
         Icon::Folder => {
             "M3 7 Q3 5.5 4.5 5.5 L9 5.5 L11 7.5 L19.5 7.5 Q21 7.5 21 9 L21 17.5 Q21 19 19.5 19 L4.5 19 Q3 19 3 17.5 Z"
         }
+        Icon::Zip => "R 3 4 18 4.5 1.2 M5 8.5 L5 19 Q5 20 6 20 L18 20 Q19 20 19 19 L19 8.5 M12 12 L12 12.1 M12 14.5 L12 14.6 M12 17 L12 17.1",
+        Icon::Unzip => "R 3 4 18 4.5 1.2 M5 8.5 L5 19 Q5 20 6 20 L18 20 Q19 20 19 19 L19 8.5 M12 11.5 L12 17.5 M9.3 15 L12 17.7 L14.7 15",
+        Icon::Hash => "M9.5 4 L7.5 20 M16.5 4 L14.5 20 M4.5 9 L20 9 M4 15 L19.5 15",
+        Icon::Copy => "R 8.5 8.5 12 12 2.2 M5.5 15.5 L5.5 6.5 Q5.5 4.5 7.5 4.5 L15.5 4.5",
+        Icon::Reveal => "M10 5.5 L6.5 5.5 Q4.5 5.5 4.5 7.5 L4.5 17.5 Q4.5 19.5 6.5 19.5 L16.5 19.5 Q18.5 19.5 18.5 17.5 L18.5 14 M13.5 4.5 L19.5 4.5 L19.5 10.5 M19.5 4.5 L11 13",
     };
     s.to_string()
 }
 
-const ICONS: [Icon; 19] = [
+const ICONS: [Icon; 24] = [
     Icon::Image,
     Icon::Photo,
     Icon::Doc,
@@ -377,6 +392,11 @@ const ICONS: [Icon; 19] = [
     Icon::Crop,
     Icon::Redact,
     Icon::Folder,
+    Icon::Zip,
+    Icon::Unzip,
+    Icon::Hash,
+    Icon::Copy,
+    Icon::Reveal,
 ];
 
 fn parse_icon(src: &str) -> Option<Path> {
@@ -1223,7 +1243,7 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
     use crate::engine::{Availability, SourceKind, Target};
     use crate::ring::{build, Env, RingKind, Switch};
     let env = Env {
-        target: &|t| match t {
+        target: &|_, t| match t {
             Target::Image(Fmt::Avif) => {
                 Availability::Unavailable("AVIF encoding needs an AV1 encoder, which Windows does not include".into())
             }
@@ -1236,7 +1256,7 @@ pub fn demo_scene(kind: usize, hover: Option<usize>, lang: crate::config::Lang) 
         7 => (SourceKind::Image(Fmt::Png), RingKind::Actions),
         _ => (SourceKind::Image(Fmt::Png), RingKind::Images),
     };
-    let menu = build(src, ring, 1, &env);
+    let menu = build(&[src], ring, 1, &env);
     let mut sc = crate::menus::scene(src, &menu, "1.1 MB", Switch::Both, lang).settled();
     if let Some(i) = hover.filter(|&i| i < menu.items.len()) {
         if menu.items[i].enabled {
@@ -1440,7 +1460,21 @@ mod tests {
         for l in ["PNG", "JPG", "WEBP", "GIF", "TIFF", "BMP", "AVIF", "HEIC", "PDF", "DOCX", "TXT"] {
             assert_ne!(Icon::for_label(l), Icon::Folder, "{l}");
         }
-        for l in ["COMPRESS", "METADATA", "EDIT", "ANNOTATE", "ADD BG", "CROP", "REDACT"] {
+        for l in [
+            "COMPRESS",
+            "METADATA",
+            "EDIT",
+            "ANNOTATE",
+            "ADD BG",
+            "CROP",
+            "REDACT",
+            "Zip",
+            "Unzip",
+            "Info",
+            "SHA-256",
+            "Copy path",
+            "Reveal",
+        ] {
             assert_ne!(Icon::for_label(l), Icon::Folder, "{l}");
         }
         assert_eq!(Icon::for_label("jpeg"), Icon::Photo);

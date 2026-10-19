@@ -259,7 +259,7 @@ pub unsafe fn open(action: ActionKind, path: PathBuf) {
         ActionKind::Edit => Box::new(edit::EditDialog::new(path)),
         ActionKind::Annotate => Box::new(annotate::AnnotateDialog::new(path)),
         ActionKind::Redact => Box::new(redact::RedactDialog::new(path)),
-        ActionKind::Compress | ActionKind::Metadata => return,
+        _ => return,
     };
     open_dialog(dlg, lang, cursor_dpi());
 }

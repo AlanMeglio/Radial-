@@ -16,6 +16,7 @@ mod overlay;
 mod render;
 mod ring;
 mod settings;
+mod shell;
 mod theme;
 mod trigger;
 

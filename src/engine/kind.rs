@@ -1,4 +1,4 @@
-//! Source detection (extension plus magic bytes) and the target lists that drive the menus.
+//! Source detection (extension plus magic bytes) and which conversions exist between kinds.
 
 use crate::convert::Fmt;
 use std::path::Path;
@@ -9,8 +9,17 @@ pub enum SourceKind {
     Image(Fmt),
     Pdf,
     Docx,
+    /// Plain text: txt, md, log, json, xml, ...
     Text,
-    /// Anything the engine does not read. The menus still open for it, with every sector greyed out and explained.
+    /// An Excel workbook (.xlsx).
+    Sheet,
+    /// Comma, semicolon or tab separated values.
+    Csv,
+    /// A .zip archive.
+    Archive,
+    /// A directory.
+    Folder,
+    /// Anything the engine cannot convert. The menus still open for it, with the actions that work on any file.
     Other,
 }
 
@@ -21,6 +30,8 @@ pub enum Target {
     Pdf,
     Docx,
     Txt,
+    Csv,
+    Xlsx,
 }
 
 impl Target {
@@ -30,6 +41,8 @@ impl Target {
             Target::Pdf => "PDF",
             Target::Docx => "DOCX",
             Target::Txt => "TXT",
+            Target::Csv => "CSV",
+            Target::Xlsx => "XLSX",
         }
     }
 
@@ -39,6 +52,8 @@ impl Target {
             Target::Pdf => "pdf",
             Target::Docx => "docx",
             Target::Txt => "txt",
+            Target::Csv => "csv",
+            Target::Xlsx => "xlsx",
         }
     }
 }
@@ -46,7 +61,8 @@ impl Target {
 /// How many leading bytes `detect` needs.
 pub const HEAD_LEN: usize = 1024;
 
-const TEXT_EXTS: [&str; 6] = ["txt", "text", "md", "log", "csv", "rtf"];
+const TEXT_EXTS: [&str; 12] = ["txt", "text", "md", "log", "rtf", "json", "xml", "yml", "yaml", "ini", "cfg", "html"];
+const CSV_EXTS: [&str; 2] = ["csv", "tsv"];
 
 /// Pure detection from the (optional) extension and the first bytes of the file.
 pub fn detect_head(ext: Option<&str>, head: &[u8]) -> Option<SourceKind> {
@@ -57,8 +73,12 @@ pub fn detect_head(ext: Option<&str>, head: &[u8]) -> Option<SourceKind> {
     if head.windows(5).take(HEAD_LEN).any(|w| w == b"%PDF-") && head.len() >= 5 {
         return Some(SourceKind::Pdf);
     }
+    let zip = head.starts_with(b"PK\x03\x04");
     match ext.as_deref() {
-        Some("docx") if head.starts_with(b"PK\x03\x04") => Some(SourceKind::Docx),
+        Some("docx") if zip => Some(SourceKind::Docx),
+        Some("xlsx") if zip => Some(SourceKind::Sheet),
+        Some("zip") if zip => Some(SourceKind::Archive),
+        Some(e) if CSV_EXTS.contains(&e) && !head.contains(&0) => Some(SourceKind::Csv),
         Some(e) if TEXT_EXTS.contains(&e) && !head.contains(&0) => Some(SourceKind::Text),
         _ => None,
     }
@@ -89,42 +109,31 @@ pub fn detect(path: &Path) -> Option<SourceKind> {
     detect_head(path.extension().and_then(|e| e.to_str()), &head)
 }
 
-/// `detect`, but a file the engine does not read is `Other` instead of nothing, so every drag gets a menu.
+/// `detect`, but a directory is `Folder` and a file the engine does not convert is `Other` instead of nothing, so
+/// every drag gets a menu.
 pub fn detect_any(path: &Path) -> SourceKind {
+    if path.is_dir() {
+        return SourceKind::Folder;
+    }
     detect(path).unwrap_or(SourceKind::Other)
 }
 
 /// Can the pipeline turn `kind` into `to`? Mirrors `convert_bytes`; a unit test keeps the two in step.
+///
+/// Documents (Word, text, spreadsheets) reach pictures through a PDF, and a picture reaches text through Windows OCR
+/// (whether this machine has an OCR language is `pair_availability`'s business, not this table's).
 pub fn supports(kind: SourceKind, to: Target) -> bool {
     use SourceKind as S;
     use Target as T;
     matches!(
         (kind, to),
-        (S::Image(_), T::Image(_) | T::Pdf | T::Docx)
+        (S::Image(_), T::Image(_) | T::Pdf | T::Docx | T::Txt)
             | (S::Pdf, T::Image(_) | T::Txt | T::Docx)
-            | (S::Docx, T::Txt | T::Pdf)
-            | (S::Text, T::Pdf | T::Docx)
+            | (S::Docx, T::Image(_) | T::Txt | T::Pdf)
+            | (S::Text, T::Image(_) | T::Pdf | T::Docx)
+            | (S::Csv, T::Image(_) | T::Pdf | T::Xlsx)
+            | (S::Sheet, T::Image(_) | T::Pdf | T::Txt | T::Csv)
     )
-}
-
-/// Replacement for a source's own format in the 8-sector image menu.
-const IMAGE_MENU: [Fmt; 6] = [Fmt::Png, Fmt::Webp, Fmt::Heic, Fmt::Tiff, Fmt::Avif, Fmt::Bmp];
-
-/// The sectors of the radial menu for a source, clockwise from the top.
-pub fn targets_for(kind: SourceKind) -> Vec<Target> {
-    match kind {
-        SourceKind::Pdf => vec![Target::Docx, Target::Image(Fmt::Jpg), Target::Image(Fmt::Png), Target::Txt],
-        SourceKind::Image(src) => {
-            // The source's own format is swapped for JPG so the menu always has 8 sectors.
-            let mut t: Vec<Target> =
-                IMAGE_MENU.iter().map(|&f| Target::Image(if f == src { Fmt::Jpg } else { f })).collect();
-            t.extend([Target::Pdf, Target::Docx]);
-            t
-        }
-        SourceKind::Docx => vec![Target::Pdf, Target::Txt],
-        SourceKind::Text => vec![Target::Pdf, Target::Docx],
-        SourceKind::Other => vec![],
-    }
 }
 
 #[cfg(test)]
@@ -171,7 +180,7 @@ mod tests {
     #[test]
     fn zip_is_docx_only_with_the_docx_extension() {
         assert_eq!(detect_head(Some("DOCX"), b"PK\x03\x04rest"), Some(SourceKind::Docx));
-        assert_eq!(detect_head(Some("zip"), b"PK\x03\x04rest"), None);
+        assert_eq!(detect_head(Some("jar"), b"PK\x03\x04rest"), None);
         assert_eq!(detect_head(None, b"PK\x03\x04rest"), None);
     }
 
@@ -185,33 +194,43 @@ mod tests {
     }
 
     #[test]
-    fn pdf_menu_matches_the_reference() {
-        let t = targets_for(SourceKind::Pdf);
-        assert_eq!(t, vec![Target::Docx, Target::Image(Fmt::Jpg), Target::Image(Fmt::Png), Target::Txt]);
-    }
-
-    #[test]
-    fn image_menu_has_eight_distinct_sectors_without_the_source_format() {
-        let jpg = targets_for(SourceKind::Image(Fmt::Jpg));
-        let want = [Fmt::Png, Fmt::Webp, Fmt::Heic, Fmt::Tiff, Fmt::Avif, Fmt::Bmp];
-        let mut expect: Vec<Target> = want.iter().map(|f| Target::Image(*f)).collect();
-        expect.extend([Target::Pdf, Target::Docx]);
-        assert_eq!(jpg, expect);
-        for f in [Fmt::Png, Fmt::Webp, Fmt::Gif, Fmt::Heic, Fmt::Tiff, Fmt::Avif, Fmt::Bmp, Fmt::Jpg] {
-            let t = targets_for(SourceKind::Image(f));
-            assert_eq!(t.len(), 8, "{f:?}");
-            assert!(!t.contains(&Target::Image(f)), "{f:?} must not convert to itself");
-            let mut d = t.clone();
-            d.dedup();
-            assert_eq!(d.len(), 8);
+    fn documents_and_pictures_reach_each_other_where_the_engine_can_go() {
+        let png = SourceKind::Image(Fmt::Png);
+        assert!(supports(png, Target::Txt), "a picture reads out as text with OCR");
+        assert!(supports(png, Target::Docx) && supports(png, Target::Pdf));
+        assert!(supports(SourceKind::Docx, Target::Image(Fmt::Png)), "through a PDF");
+        assert!(supports(SourceKind::Text, Target::Image(Fmt::Jpg)));
+        assert!(supports(SourceKind::Sheet, Target::Csv) && supports(SourceKind::Csv, Target::Xlsx));
+        assert!(!supports(SourceKind::Sheet, Target::Xlsx), "not to itself");
+        assert!(!supports(SourceKind::Pdf, Target::Pdf) && !supports(SourceKind::Text, Target::Txt));
+        for k in [SourceKind::Archive, SourceKind::Folder, SourceKind::Other] {
+            for t in [Target::Pdf, Target::Txt, Target::Docx, Target::Csv, Target::Xlsx, Target::Image(Fmt::Png)] {
+                assert!(!supports(k, t), "{k:?} -> {t:?}");
+            }
         }
-        assert!(targets_for(SourceKind::Image(Fmt::Png)).contains(&Target::Image(Fmt::Jpg)));
     }
 
     #[test]
-    fn document_menus() {
-        assert_eq!(targets_for(SourceKind::Docx), vec![Target::Pdf, Target::Txt]);
-        assert_eq!(targets_for(SourceKind::Text), vec![Target::Pdf, Target::Docx]);
+    fn spreadsheets_csv_and_archives_are_told_apart_from_word_and_text() {
+        assert_eq!(detect_head(Some("xlsx"), b"PK\x03\x04rest"), Some(SourceKind::Sheet));
+        assert_eq!(detect_head(Some("XLSX"), b"not a zip"), None);
+        assert_eq!(detect_head(Some("zip"), b"PK\x03\x04rest"), Some(SourceKind::Archive));
+        assert_eq!(detect_head(Some("csv"), b"a,b\n1,2\n"), Some(SourceKind::Csv));
+        assert_eq!(detect_head(Some("tsv"), b"a\tb\n"), Some(SourceKind::Csv));
+        assert_eq!(detect_head(Some("json"), b"{\"a\":1}"), Some(SourceKind::Text));
+        assert_eq!(detect_head(Some("csv"), b"a,\0b"), None, "binary bytes are not text");
+    }
+
+    #[test]
+    fn folders_and_unknown_files_still_get_a_kind() {
+        let dir = std::env::temp_dir().join(format!("radial-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ogg = dir.join("song.ogg");
+        std::fs::write(&ogg, b"OggS\0\x02").unwrap();
+        assert_eq!(detect_any(&dir), SourceKind::Folder);
+        assert_eq!(detect_any(&ogg), SourceKind::Other);
+        assert_eq!(detect_any(&dir.join("missing.bin")), SourceKind::Other);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -219,6 +238,7 @@ mod tests {
         assert_eq!(Target::Pdf.label(), "PDF");
         assert_eq!(Target::Docx.ext(), "docx");
         assert_eq!(Target::Txt.ext(), "txt");
+        assert_eq!((Target::Csv.label(), Target::Xlsx.ext()), ("CSV", "xlsx"));
         assert_eq!(Target::Image(Fmt::Jpg).label(), "JPG");
     }
 }

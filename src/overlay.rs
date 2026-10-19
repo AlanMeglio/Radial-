@@ -137,6 +137,8 @@ struct Ov {
     /// Seconds into the drop confirmation, if one is playing.
     confirm_t: Option<f32>,
     kind: Option<SourceKind>,
+    /// What every dragged file is (capped), not just the first.
+    kinds: Vec<SourceKind>,
     menu: Option<Menu>,
     switch: Switch,
     lang: Lang,
@@ -243,6 +245,7 @@ pub unsafe fn show(x: i32, y: i32) {
         last: Instant::now(),
         confirm_t: None,
         kind: None,
+        kinds: vec![],
         menu: None,
         switch: cfg.ring_switch,
         lang: cfg.lang,
@@ -481,9 +484,9 @@ fn size_text(files: &[PathBuf], lang: Lang) -> String {
 }
 
 /// The menu for `kind` on this machine: what the engine can read and write right now.
-fn menu_for(kind: SourceKind, ring: RingKind, files: usize) -> Menu {
-    let env = Env { target: &engine::target_availability, source: &engine::source_availability };
-    build(kind, ring, files, &env)
+fn menu_for(kinds: &[SourceKind], ring: RingKind, files: usize) -> Menu {
+    let env = Env { target: &engine::pair_availability, source: &engine::source_availability };
+    build(kinds, ring, files, &env)
 }
 
 /// Installs `menu` as the live ring: scene, sector springs and the baked glass for its sector count.
@@ -506,8 +509,11 @@ fn install_menu(o: &mut Ov, kind: SourceKind, menu: Menu) {
 /// Moves `delta` rings along (wrapping); the sectors bloom in again.
 fn step_ring(o: &mut Ov, delta: i32) {
     let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return };
-    let next = menu.kind.step(delta);
-    let fresh = menu_for(kind, next, o.files.len());
+    if !menu.switchable() {
+        return;
+    }
+    let next = menu.neighbour(delta);
+    let fresh = menu_for(&o.kinds, next, o.files.len());
     install_menu(o, kind, fresh);
 }
 
@@ -528,7 +534,7 @@ fn hover_at(o: &mut Ov, pt: POINTL) -> (u32, bool) {
     let (Some(kind), Some(menu)) = (o.kind, o.menu.as_ref()) else { return (NONE, false) };
     let m = o.look.m;
     let (dx, dy) = offset(o, pt);
-    let on_hub = dx.hypot(dy) < m.hub && o.switch.hub();
+    let on_hub = dx.hypot(dy) < m.hub && menu.switchable() && o.switch.hub();
     let (progress, flip) = o.dwell.update(on_hub, o.clock.elapsed().as_millis() as u32);
     // While the pointer rests on the hub the frame timer must keep running to advance the dwell.
     let mut changed = (progress - o.scene.dwell).abs() > 0.002 || o.dwell.pending();
@@ -639,18 +645,22 @@ unsafe extern "system" fn drag_enter(
 ) -> i32 {
     let files = read_files(data);
     *effect = NONE;
-    // Any file gets the menus; one the engine cannot read shows them greyed out, with the reason.
-    let Some(kind) = files.first().map(|f| engine::detect_any(f)) else { return 0 };
+    // Every file gets a menu: what it is decides which rings it has. Reading each file's first bytes is capped so a
+    // drag of thousands of files opens at once; the rest are handled (and refused one by one) when the job runs.
+    const KINDS_CAP: usize = 200;
+    let kinds: Vec<SourceKind> = files.iter().take(KINDS_CAP).map(|f| engine::detect_any(f)).collect();
+    let Some(&kind) = kinds.first() else { return 0 };
     let cfg = crate::current_config();
     let opened = with(|o| {
         o.switch = cfg.ring_switch;
         o.lang = cfg.lang;
         o.size_txt = size_text(&files, cfg.lang);
         o.files = files;
-        let wanted = cfg.start_ring.unwrap_or_else(|| RingKind::home(kind));
-        let menu = menu_for(kind, wanted, o.files.len());
-        TAB_SWITCH.store(o.switch.tab(), Relaxed);
-        WHEEL_SWITCH.store(true, Relaxed);
+        let wanted = crate::ring::first_ring(&kinds, cfg.start_ring);
+        let menu = menu_for(&kinds, wanted, o.files.len());
+        TAB_SWITCH.store(menu.switchable() && o.switch.tab(), Relaxed);
+        WHEEL_SWITCH.store(menu.switchable(), Relaxed);
+        o.kinds = kinds;
         install_menu(o, kind, menu);
         o.phase = Phase::Open;
         o.target_open = 1.0;

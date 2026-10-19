@@ -1,13 +1,16 @@
-//! Which sectors a menu shows for a dragged file, and which of them can be used right now.
+//! Which sectors a menu shows for the dragged files, and which of them can be used right now.
 //!
-//! Pure logic: the engine answers (`detect`, `targets_for`, availability) are injected through [`Env`], so the
-//! rules are unit tested without touching Windows codecs. The overlay turns a [`Menu`] into a scene.
+//! Pure logic: the engine answers (`supports`, availability) are injected through [`Env`], so the rules are unit
+//! tested without touching Windows codecs. The overlay turns a [`Menu`] into a scene.
+//!
+//! Every file gets up to three rings: documents (menu 1), images (menu 2) and actions (menu 3). A ring is offered
+//! only when something in it can work for the files being dragged, so there are never rings full of dead sectors;
+//! a sector is greyed out (with the reason) only when this machine lacks something or just some of the files fit.
 
 use crate::convert::Fmt;
-use crate::engine::{Availability, SourceKind, Target};
+use crate::engine::{supports, Availability, SourceKind, Target};
 
-/// The three rings every dragged file gets: document conversions (menu 1), image formats (menu 2) and the seven
-/// actions (menu 3). The wheel, Tab and the hub walk through them in this order.
+/// The three rings. The wheel, Tab and the hub walk through the ones a file has, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingKind {
     Documents,
@@ -22,7 +25,7 @@ impl RingKind {
         Self::ALL.iter().position(|r| *r == self).unwrap_or(0)
     }
 
-    /// The ring `delta` steps away, wrapping around.
+    /// The ring `delta` steps away among all three, wrapping around.
     pub fn step(self, delta: i32) -> RingKind {
         Self::ALL[(self.index() as i32 + delta).rem_euclid(Self::ALL.len() as i32) as usize]
     }
@@ -45,7 +48,7 @@ impl RingKind {
     }
 }
 
-/// The actions of menu 3, in clockwise order from the top.
+/// What a sector of the actions ring does. The first seven work on pictures; the rest on any file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionKind {
     Compress,
@@ -55,9 +58,22 @@ pub enum ActionKind {
     AddBg,
     Crop,
     Redact,
+    /// Packs the files into one .zip.
+    Zip,
+    /// Extracts a .zip next to itself.
+    Unzip,
+    /// Shows the properties of the file.
+    Info,
+    /// SHA-256 of each file, copied to the clipboard.
+    Checksum,
+    /// The full path of each file, copied to the clipboard.
+    CopyPath,
+    /// Opens Explorer with the file selected.
+    Reveal,
 }
 
 impl ActionKind {
+    /// The seven picture tools of menu 3, in clockwise order from the top.
     pub const ALL: [ActionKind; 7] = [
         ActionKind::Compress,
         ActionKind::Metadata,
@@ -68,9 +84,21 @@ impl ActionKind {
         ActionKind::Redact,
     ];
 
+    /// What menu 3 offers for anything that is not purely pictures.
+    pub const UNIVERSAL: [ActionKind; 5] =
+        [ActionKind::Zip, ActionKind::Info, ActionKind::Checksum, ActionKind::CopyPath, ActionKind::Reveal];
+
+    /// Opens a window instead of running on drop.
+    pub fn is_dialog(self) -> bool {
+        matches!(
+            self,
+            ActionKind::Edit | ActionKind::Annotate | ActionKind::AddBg | ActionKind::Crop | ActionKind::Redact
+        )
+    }
+
     /// Runs on drop with no window.
     pub fn is_immediate(self) -> bool {
-        matches!(self, ActionKind::Compress | ActionKind::Metadata)
+        !self.is_dialog()
     }
 
     /// Parses the command line / environment spelling of an action (`crop`, `addbg`, ...).
@@ -83,6 +111,12 @@ impl ActionKind {
             "addbg" | "bg" => ActionKind::AddBg,
             "crop" => ActionKind::Crop,
             "redact" => ActionKind::Redact,
+            "zip" => ActionKind::Zip,
+            "unzip" => ActionKind::Unzip,
+            "info" => ActionKind::Info,
+            "checksum" | "sha256" => ActionKind::Checksum,
+            "copypath" | "path" => ActionKind::CopyPath,
+            "reveal" => ActionKind::Reveal,
             _ => return None,
         })
     }
@@ -97,6 +131,12 @@ impl ActionKind {
             ActionKind::AddBg => "act-addbg",
             ActionKind::Crop => "act-crop",
             ActionKind::Redact => "act-redact",
+            ActionKind::Zip => "act-zip",
+            ActionKind::Unzip => "act-unzip",
+            ActionKind::Info => "act-info",
+            ActionKind::Checksum => "act-checksum",
+            ActionKind::CopyPath => "act-copypath",
+            ActionKind::Reveal => "act-reveal",
         }
     }
 
@@ -110,6 +150,12 @@ impl ActionKind {
             ActionKind::AddBg => "act-addbg-hint",
             ActionKind::Crop => "act-crop-hint",
             ActionKind::Redact => "act-redact-hint",
+            ActionKind::Zip => "act-zip-hint",
+            ActionKind::Unzip => "act-unzip-hint",
+            ActionKind::Info => "act-info-hint",
+            ActionKind::Checksum => "act-checksum-hint",
+            ActionKind::CopyPath => "act-copypath-hint",
+            ActionKind::Reveal => "act-reveal-hint",
         }
     }
 }
@@ -123,14 +169,16 @@ pub enum Op {
 /// Why a sector is greyed out. Shown in the caption under the ring, never hidden.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reason {
-    /// The engine says this machine cannot do it (missing Windows codec): its own explanation.
+    /// The engine says this machine cannot do it (missing Windows codec or OCR language): its own explanation.
     Engine(String),
     /// Dialog actions work on one file at a time.
     OneFile,
     /// The action only handles some formats; the list is shown.
     Formats(&'static str),
-    /// There is no conversion from this file to that format.
+    /// Some of the dragged files cannot be converted to that format.
     NoPath,
+    /// The action reads file contents, and a folder was dragged.
+    FilesOnly,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,19 +192,42 @@ pub struct Item {
 pub struct Menu {
     pub kind: RingKind,
     pub items: Vec<Item>,
+    /// The rings these files have, in wheel order (this one included).
+    pub rings: Vec<RingKind>,
+}
+
+impl Menu {
+    /// The ring `delta` steps along the rings these files have, wrapping around.
+    pub fn neighbour(&self, delta: i32) -> RingKind {
+        let at = self.rings.iter().position(|r| *r == self.kind).unwrap_or(0) as i32;
+        let n = self.rings.len().max(1) as i32;
+        self.rings.get((at + delta).rem_euclid(n) as usize).copied().unwrap_or(self.kind)
+    }
+
+    /// Where this ring sits among the rings of these files, and how many there are.
+    pub fn position(&self) -> (usize, usize) {
+        (self.rings.iter().position(|r| *r == self.kind).unwrap_or(0), self.rings.len())
+    }
+
+    /// True when there is another ring to go to.
+    pub fn switchable(&self) -> bool {
+        self.rings.len() > 1
+    }
 }
 
 /// What the engine can do on this machine; injected so the rules can be tested.
 pub struct Env<'a> {
-    pub target: &'a dyn Fn(Target) -> Availability,
+    /// Can a file of this kind be turned into that format here (codecs, OCR language)?
+    pub target: &'a dyn Fn(SourceKind, Target) -> Availability,
+    /// Can this kind of file be read here?
     pub source: &'a dyn Fn(SourceKind) -> Availability,
 }
 
-/// Sectors of the document ring (menu 1), clockwise from the top.
-const DOCUMENT_RING: [Target; 4] = [Target::Docx, Target::Image(Fmt::Jpg), Target::Image(Fmt::Png), Target::Txt];
+/// Sectors of the document ring (menu 1) for a PDF, clockwise from the top.
+const DOCUMENT_BASE: [Target; 4] = [Target::Docx, Target::Image(Fmt::Jpg), Target::Image(Fmt::Png), Target::Txt];
 
-/// Sectors of the image ring (menu 2).
-const IMAGE_RING: [Target; 8] = [
+/// Sectors of the image ring (menu 2) for a picture.
+const IMAGE_BASE: [Target; 8] = [
     Target::Image(Fmt::Png),
     Target::Image(Fmt::Webp),
     Target::Image(Fmt::Heic),
@@ -167,6 +238,17 @@ const IMAGE_RING: [Target; 8] = [
     Target::Docx,
 ];
 
+/// The picture formats offered for anything that is not a picture.
+const PICTURE_FORMATS: [Target; 7] = [
+    Target::Image(Fmt::Png),
+    Target::Image(Fmt::Jpg),
+    Target::Image(Fmt::Webp),
+    Target::Image(Fmt::Heic),
+    Target::Image(Fmt::Tiff),
+    Target::Image(Fmt::Avif),
+    Target::Image(Fmt::Bmp),
+];
+
 /// The format a source already is, as a conversion target (so its own sector can be swapped for something useful).
 fn own_target(kind: SourceKind) -> Option<Target> {
     match kind {
@@ -174,56 +256,121 @@ fn own_target(kind: SourceKind) -> Option<Target> {
         SourceKind::Pdf => Some(Target::Pdf),
         SourceKind::Docx => Some(Target::Docx),
         SourceKind::Text => Some(Target::Txt),
-        SourceKind::Other => None,
+        SourceKind::Csv => Some(Target::Csv),
+        SourceKind::Sheet => Some(Target::Xlsx),
+        SourceKind::Archive | SourceKind::Folder | SourceKind::Other => None,
     }
 }
 
-/// Sectors of a conversion ring for `kind`. Converting a file to its own format is pointless, so that sector shows
-/// the ring's stand-in instead: PDF in the document ring, JPG in the image ring.
-fn ring_targets(ring: RingKind, kind: SourceKind) -> Vec<Target> {
-    let (base, stand_in): (&[Target], Target) = match ring {
-        RingKind::Documents => (&DOCUMENT_RING, Target::Pdf),
-        _ => (&IMAGE_RING, Target::Image(Fmt::Jpg)),
+/// The sectors of a conversion ring, laid out for the first file's kind. Converting to the file's own format is
+/// pointless, so that sector shows a stand-in: PDF in the document ring, JPG in the image ring.
+fn layout(ring: RingKind, lead: SourceKind) -> Vec<Target> {
+    let own = own_target(lead);
+    if ring == RingKind::Images {
+        if !matches!(lead, SourceKind::Image(_)) {
+            return PICTURE_FORMATS.to_vec();
+        }
+        return IMAGE_BASE.iter().map(|&t| if Some(t) == own { Target::Image(Fmt::Jpg) } else { t }).collect();
+    }
+    let mut out: Vec<Target> = match lead {
+        SourceKind::Sheet => vec![Target::Csv],
+        SourceKind::Csv => vec![Target::Xlsx],
+        _ => vec![],
     };
-    let own = own_target(kind);
-    base.iter().map(|&t| if Some(t) == own { stand_in } else { t }).collect()
+    if lead == SourceKind::Pdf {
+        out.extend(DOCUMENT_BASE);
+    } else if own.is_some_and(|o| DOCUMENT_BASE.contains(&o)) {
+        out.extend(DOCUMENT_BASE.iter().map(|&t| if Some(t) == own { Target::Pdf } else { t }));
+    } else {
+        out.extend(DOCUMENT_BASE);
+        out.push(Target::Pdf);
+    }
+    out
 }
 
-/// The menu to show for `ring` while dragging `files` files of `kind`. Every file gets all three rings; a sector the
-/// engine cannot do for this file is greyed out with the reason, never hidden.
-pub fn build(kind: SourceKind, ring: RingKind, files: usize, env: &Env) -> Menu {
-    let src = availability((env.source)(kind));
-    let image = match kind {
-        SourceKind::Image(f) => Some(f),
-        _ => None,
-    };
-    if ring != RingKind::Actions {
-        let items = ring_targets(ring, kind)
-            .into_iter()
-            .map(|t| {
-                let check = src
-                    .clone()
-                    .and_then(|_| if crate::engine::supports(kind, t) { Ok(()) } else { Err(Reason::NoPath) })
-                    .and_then(|_| availability((env.target)(t)));
-                item(Op::Convert(t), check)
-            })
-            .collect();
-        return Menu { kind: ring, items };
+/// Every file is a picture (the actions ring then has the picture tools).
+fn all_images(kinds: &[SourceKind]) -> bool {
+    !kinds.is_empty() && kinds.iter().all(|k| matches!(k, SourceKind::Image(_)))
+}
+
+/// The operations a ring has for these files, before availability: only what at least one file can do.
+fn ring_ops(ring: RingKind, kinds: &[SourceKind]) -> Vec<Op> {
+    let Some(&lead) = kinds.first() else { return vec![] };
+    match ring {
+        RingKind::Actions if all_images(kinds) => ActionKind::ALL.iter().map(|&a| Op::Action(a)).collect(),
+        RingKind::Actions => {
+            let mut ops = Vec::new();
+            if kinds.iter().all(|k| *k == SourceKind::Archive) {
+                ops.push(Op::Action(ActionKind::Unzip));
+            }
+            ops.extend(ActionKind::UNIVERSAL.iter().map(|&a| Op::Action(a)));
+            ops
+        }
+        _ => {
+            layout(ring, lead).into_iter().filter(|&t| kinds.iter().any(|&k| supports(k, t))).map(Op::Convert).collect()
+        }
     }
-    let items = ActionKind::ALL
+}
+
+/// The rings these files have, in wheel order. The actions ring is always there, so there is always one.
+pub fn rings_for(kinds: &[SourceKind]) -> Vec<RingKind> {
+    RingKind::ALL.into_iter().filter(|&r| !ring_ops(r, kinds).is_empty() || r == RingKind::Actions).collect()
+}
+
+/// The ring a drag opens on: the user's choice or the file's natural one, falling back to the first the files have.
+pub fn first_ring(kinds: &[SourceKind], wanted: Option<RingKind>) -> RingKind {
+    let rings = rings_for(kinds);
+    let natural = kinds.first().map_or(RingKind::Documents, |&k| RingKind::home(k));
+    [wanted, Some(natural)]
         .into_iter()
-        .map(|a| {
-            let check = src.clone().and_then(|_| match (a, image) {
-                (_, None) => Err(Reason::Formats("images")),
-                (ActionKind::Compress, Some(f)) if !compress_ok(f) => Err(Reason::Formats("JPG, PNG, WEBP")),
-                (ActionKind::Metadata, Some(f)) if !metadata_ok(f) => Err(Reason::Formats("JPG, PNG, WEBP, TIFF")),
-                _ if !a.is_immediate() && files != 1 => Err(Reason::OneFile),
-                _ => Ok(()),
+        .flatten()
+        .find(|r| rings.contains(r))
+        .or_else(|| rings.first().copied())
+        .unwrap_or(RingKind::Actions)
+}
+
+/// The menu to show for `ring` while dragging `files` files of these kinds (the first is the one the layout follows).
+pub fn build(kinds: &[SourceKind], ring: RingKind, files: usize, env: &Env) -> Menu {
+    let rings = rings_for(kinds);
+    let ring = if rings.contains(&ring) { ring } else { first_ring(kinds, None) };
+    let lead = kinds.first().copied().unwrap_or(SourceKind::Other);
+    let src = kinds.iter().try_fold((), |(), &k| availability((env.source)(k)));
+    let items = ring_ops(ring, kinds)
+        .into_iter()
+        .map(|op| {
+            let check = src.clone().and_then(|_| match op {
+                Op::Convert(t) => {
+                    if kinds.iter().all(|&k| supports(k, t)) {
+                        availability((env.target)(lead, t))
+                    } else {
+                        Err(Reason::NoPath)
+                    }
+                }
+                Op::Action(a) => action_check(a, kinds, files),
             });
-            item(Op::Action(a), check)
+            item(op, check)
         })
         .collect();
-    Menu { kind: RingKind::Actions, items }
+    Menu { kind: ring, items, rings }
+}
+
+/// Can action `a` work on these files?
+fn action_check(a: ActionKind, kinds: &[SourceKind], files: usize) -> Result<(), Reason> {
+    let folder = kinds.contains(&SourceKind::Folder);
+    let fmts: Vec<Fmt> = kinds
+        .iter()
+        .filter_map(|k| match k {
+            SourceKind::Image(f) => Some(*f),
+            _ => None,
+        })
+        .collect();
+    match a {
+        ActionKind::Compress if !fmts.iter().all(|&f| compress_ok(f)) => Err(Reason::Formats("JPG, PNG, WEBP")),
+        ActionKind::Metadata if !fmts.iter().all(|&f| metadata_ok(f)) => Err(Reason::Formats("JPG, PNG, WEBP, TIFF")),
+        ActionKind::Info | ActionKind::Checksum if folder => Err(Reason::FilesOnly),
+        _ if a.is_dialog() && files != 1 => Err(Reason::OneFile),
+        _ => Ok(()),
+    }
 }
 
 fn availability(a: Availability) -> Result<(), Reason> {
@@ -310,7 +457,13 @@ mod tests {
     use super::*;
 
     fn all_ok() -> Env<'static> {
-        Env { target: &|_| Availability::Available, source: &|_| Availability::Available }
+        Env { target: &|_, _| Availability::Available, source: &|_| Availability::Available }
+    }
+
+    const PNG: SourceKind = SourceKind::Image(Fmt::Png);
+
+    fn one(kind: SourceKind, ring: RingKind) -> Menu {
+        build(&[kind], ring, 1, &all_ok())
     }
 
     fn labels(m: &Menu) -> Vec<&'static str> {
@@ -336,7 +489,7 @@ mod tests {
 
     #[test]
     fn a_png_gets_eight_image_sectors_with_jpg_in_place_of_png() {
-        let m = build(SourceKind::Image(Fmt::Png), RingKind::Images, 1, &all_ok());
+        let m = one(PNG, RingKind::Images);
         assert_eq!(labels(&m), ["JPG", "WEBP", "HEIC", "TIFF", "AVIF", "BMP", "PDF", "DOCX"]);
         assert!(m.items.iter().all(|i| i.enabled && i.reason.is_none()));
         assert_eq!(m.kind, RingKind::Images);
@@ -344,76 +497,155 @@ mod tests {
 
     #[test]
     fn a_pdf_gets_the_four_sector_document_ring() {
-        let m = build(SourceKind::Pdf, RingKind::Documents, 1, &all_ok());
+        let m = one(SourceKind::Pdf, RingKind::Documents);
         assert_eq!(labels(&m), ["DOCX", "JPG", "PNG", "TXT"]);
         assert!(m.items.iter().all(|i| i.enabled));
-        assert_eq!(m.kind, RingKind::Documents);
     }
 
     #[test]
-    fn every_file_type_gets_all_three_rings_and_a_greyed_sector_always_says_why() {
-        let kinds =
-            [SourceKind::Image(Fmt::Png), SourceKind::Pdf, SourceKind::Docx, SourceKind::Text, SourceKind::Other];
-        for kind in kinds {
-            for ring in RingKind::ALL {
-                let m = build(kind, ring, 1, &all_ok());
-                assert_eq!(m.kind, ring, "{kind:?}");
-                assert_eq!(m.items.len(), [4, 8, 7][ring.index()], "{kind:?} {ring:?}");
-                for i in &m.items {
-                    assert_eq!(i.enabled, i.reason.is_none(), "{kind:?} {ring:?}");
-                }
-            }
-        }
+    fn a_picture_gets_documents_too_and_reads_its_text_with_ocr() {
+        let m = one(PNG, RingKind::Documents);
+        assert_eq!(labels(&m), ["DOCX", "JPG", "PDF", "TXT"], "PNG's own sector becomes PDF");
+        assert!(m.items.iter().all(|i| i.enabled));
+        let jpg = one(SourceKind::Image(Fmt::Jpg), RingKind::Documents);
+        assert_eq!(labels(&jpg), ["DOCX", "PDF", "PNG", "TXT"]);
+        let webp = one(SourceKind::Image(Fmt::Webp), RingKind::Documents);
+        assert_eq!(labels(&webp), ["DOCX", "JPG", "PNG", "TXT", "PDF"], "no own sector: PDF is added");
     }
 
     #[test]
-    fn documents_reach_the_image_ring_and_images_reach_the_document_ring() {
-        let pdf = build(SourceKind::Pdf, RingKind::Images, 1, &all_ok());
-        assert_eq!(labels(&pdf), ["PNG", "WEBP", "HEIC", "TIFF", "AVIF", "BMP", "JPG", "DOCX"]);
-        assert_eq!(enabled(&pdf), ["PNG", "WEBP", "HEIC", "TIFF", "AVIF", "BMP", "JPG", "DOCX"]);
-        let png = build(SourceKind::Image(Fmt::Png), RingKind::Documents, 1, &all_ok());
-        assert_eq!(labels(&png), ["DOCX", "JPG", "PDF", "TXT"], "PNG's own sector becomes PDF");
-        assert_eq!(enabled(&png), ["DOCX", "JPG", "PDF"], "no OCR to text from a picture");
-        assert_eq!(png.items[3].reason, Some(Reason::NoPath));
+    fn without_a_windows_ocr_language_the_txt_sector_of_a_picture_is_greyed_with_the_reason() {
+        let env = Env {
+            target: &|k, t| match (k, t) {
+                (SourceKind::Image(_), Target::Txt) => Availability::Unavailable("no OCR language".into()),
+                _ => Availability::Available,
+            },
+            source: &|_| Availability::Available,
+        };
+        let m = build(&[PNG], RingKind::Documents, 1, &env);
+        let txt = m.items.iter().find(|i| i.op == Op::Convert(Target::Txt)).unwrap();
+        assert!(!txt.enabled);
+        assert_eq!(txt.reason, Some(Reason::Engine("no OCR language".into())));
+        assert_eq!(enabled(&m), ["DOCX", "JPG", "PDF"]);
+        let pdf = build(&[SourceKind::Pdf], RingKind::Documents, 1, &env);
+        assert!(pdf.items.iter().all(|i| i.enabled), "a PDF's text does not need OCR");
     }
 
     #[test]
-    fn docx_and_text_keep_what_they_could_always_do_and_grey_the_rest() {
-        let docx = build(SourceKind::Docx, RingKind::Documents, 1, &all_ok());
+    fn word_and_text_files_reach_pdf_text_and_pictures() {
+        let docx = one(SourceKind::Docx, RingKind::Documents);
         assert_eq!(labels(&docx), ["PDF", "JPG", "PNG", "TXT"]);
-        assert_eq!(enabled(&docx), ["PDF", "TXT"]);
-        let text = build(SourceKind::Text, RingKind::Documents, 1, &all_ok());
+        let text = one(SourceKind::Text, RingKind::Documents);
         assert_eq!(labels(&text), ["DOCX", "JPG", "PNG", "PDF"]);
-        assert_eq!(enabled(&text), ["DOCX", "PDF"]);
+        let pics = one(SourceKind::Docx, RingKind::Images);
+        assert_eq!(labels(&pics), ["PNG", "JPG", "WEBP", "HEIC", "TIFF", "AVIF", "BMP"], "picture formats only");
     }
 
     #[test]
-    fn an_unknown_file_still_opens_all_rings_with_every_sector_greyed() {
-        for ring in RingKind::ALL {
-            let m = build(SourceKind::Other, ring, 1, &all_ok());
-            assert!(m.items.iter().all(|i| !i.enabled && i.reason.is_some()), "{ring:?}");
+    fn spreadsheets_lead_with_csv_and_csv_leads_with_xlsx() {
+        let sheet = one(SourceKind::Sheet, RingKind::Documents);
+        assert_eq!(labels(&sheet), ["CSV", "JPG", "PNG", "TXT", "PDF"], "no sector the engine cannot do");
+        let csv = one(SourceKind::Csv, RingKind::Documents);
+        assert_eq!(labels(&csv), ["XLSX", "JPG", "PNG", "PDF"]);
+    }
+
+    #[test]
+    fn rings_nobody_can_use_are_skipped_and_the_actions_ring_is_always_there() {
+        assert_eq!(rings_for(&[PNG]), RingKind::ALL);
+        assert_eq!(rings_for(&[SourceKind::Pdf]), RingKind::ALL);
+        for k in [SourceKind::Other, SourceKind::Archive, SourceKind::Folder] {
+            assert_eq!(rings_for(&[k]), [RingKind::Actions], "{k:?}");
         }
-        let actions = build(SourceKind::Other, RingKind::Actions, 1, &all_ok());
-        assert_eq!(actions.items[0].reason, Some(Reason::Formats("images")));
+        assert!(rings_for(&[]).contains(&RingKind::Actions));
+        let m = one(SourceKind::Other, RingKind::Documents);
+        assert_eq!(m.kind, RingKind::Actions, "asking for an empty ring gives the first one the file has");
+        assert!(!m.switchable());
+        assert_eq!(m.position(), (0, 1));
     }
 
     #[test]
-    fn actions_on_a_document_are_greyed_because_they_work_on_images_only() {
-        let m = build(SourceKind::Pdf, RingKind::Actions, 1, &all_ok());
-        assert_eq!(m.items.len(), 7);
-        assert!(m.items.iter().all(|i| !i.enabled && i.reason == Some(Reason::Formats("images"))));
+    fn a_ring_the_user_asked_for_opens_first_unless_the_file_has_no_such_ring() {
+        assert_eq!(first_ring(&[PNG], None), RingKind::Images);
+        assert_eq!(first_ring(&[SourceKind::Pdf], None), RingKind::Documents);
+        assert_eq!(first_ring(&[PNG], Some(RingKind::Actions)), RingKind::Actions);
+        assert_eq!(first_ring(&[SourceKind::Other], None), RingKind::Actions);
+        assert_eq!(first_ring(&[SourceKind::Archive], Some(RingKind::Images)), RingKind::Actions);
+    }
+
+    #[test]
+    fn the_wheel_walks_only_the_rings_a_file_has() {
+        let m = one(SourceKind::Other, RingKind::Actions);
+        assert_eq!(m.neighbour(1), RingKind::Actions);
+        let pdf = one(SourceKind::Pdf, RingKind::Documents);
+        assert_eq!((pdf.neighbour(1), pdf.neighbour(-1)), (RingKind::Images, RingKind::Actions));
+        assert_eq!(pdf.position(), (0, 3));
+    }
+
+    #[test]
+    fn pictures_keep_their_seven_tools_and_everything_else_gets_the_universal_actions() {
+        let tools = one(PNG, RingKind::Actions);
+        assert_eq!(tools.items.len(), 7);
+        let order: Vec<ActionKind> = tools
+            .items
+            .iter()
+            .map(|i| match i.op {
+                Op::Action(a) => a,
+                Op::Convert(_) => panic!("conversion in the actions ring"),
+            })
+            .collect();
+        assert_eq!(order, ActionKind::ALL);
+        for k in [SourceKind::Pdf, SourceKind::Docx, SourceKind::Sheet, SourceKind::Text, SourceKind::Other] {
+            let m = one(k, RingKind::Actions);
+            assert_eq!(labels(&m), ["act-zip", "act-info", "act-checksum", "act-copypath", "act-reveal"], "{k:?}");
+            assert!(m.items.iter().all(|i| i.enabled), "every universal action works on {k:?}");
+        }
+        let mixed = build(&[PNG, SourceKind::Pdf], RingKind::Actions, 2, &all_ok());
+        assert_eq!(mixed.items.len(), 5, "a picture and a PDF together use what works on both");
+    }
+
+    #[test]
+    fn a_zip_can_be_unzipped_and_only_a_zip() {
+        let zip = one(SourceKind::Archive, RingKind::Actions);
+        assert_eq!(labels(&zip)[0], "act-unzip");
+        assert_eq!(zip.items.len(), 6);
+        let two = build(&[SourceKind::Archive, SourceKind::Archive], RingKind::Actions, 2, &all_ok());
+        assert_eq!(labels(&two)[0], "act-unzip");
+        let mixed = build(&[SourceKind::Archive, SourceKind::Pdf], RingKind::Actions, 2, &all_ok());
+        assert!(!labels(&mixed).contains(&"act-unzip"));
+    }
+
+    #[test]
+    fn folders_can_be_zipped_copied_and_revealed_but_not_hashed() {
+        let m = one(SourceKind::Folder, RingKind::Actions);
+        let by = |a: ActionKind| m.items.iter().find(|i| i.op == Op::Action(a)).unwrap();
+        assert!(by(ActionKind::Zip).enabled && by(ActionKind::CopyPath).enabled && by(ActionKind::Reveal).enabled);
+        for a in [ActionKind::Checksum, ActionKind::Info] {
+            assert!(!by(a).enabled);
+            assert_eq!(by(a).reason, Some(Reason::FilesOnly));
+        }
+    }
+
+    #[test]
+    fn a_batch_greys_a_conversion_only_some_of_the_files_can_do() {
+        // A text file cannot be turned into a spreadsheet, a CSV can.
+        let m = build(&[SourceKind::Csv, SourceKind::Text], RingKind::Documents, 2, &all_ok());
+        let xlsx = m.items.iter().find(|i| i.op == Op::Convert(Target::Xlsx)).unwrap();
+        assert!(!xlsx.enabled);
+        assert_eq!(xlsx.reason, Some(Reason::NoPath));
+        let jpg = m.items.iter().find(|i| i.op == Op::Convert(Target::Image(Fmt::Jpg))).unwrap();
+        assert!(jpg.enabled);
     }
 
     #[test]
     fn unavailable_targets_are_disabled_with_the_engines_reason() {
         let env = Env {
-            target: &|t| match t {
+            target: &|_, t| match t {
                 Target::Image(Fmt::Avif) => Availability::Unavailable("no AV1 encoder".into()),
                 _ => Availability::Available,
             },
             source: &|_| Availability::Available,
         };
-        let m = build(SourceKind::Image(Fmt::Jpg), RingKind::Images, 1, &env);
+        let m = build(&[SourceKind::Image(Fmt::Jpg)], RingKind::Images, 1, &env);
         let avif = m.items.iter().find(|i| i.op == Op::Convert(Target::Image(Fmt::Avif))).unwrap();
         assert!(!avif.enabled);
         assert_eq!(avif.reason, Some(Reason::Engine("no AV1 encoder".into())));
@@ -423,46 +655,30 @@ mod tests {
     #[test]
     fn an_unreadable_source_disables_the_whole_ring() {
         let env = Env {
-            target: &|_| Availability::Available,
+            target: &|_, _| Availability::Available,
             source: &|_| Availability::Unavailable("HEIC decoder missing".into()),
         };
         for ring in RingKind::ALL {
-            let m = build(SourceKind::Image(Fmt::Heic), ring, 1, &env);
+            let m = build(&[SourceKind::Image(Fmt::Heic)], ring, 1, &env);
             assert!(!m.items.is_empty() && m.items.iter().all(|i| !i.enabled && i.reason.is_some()), "{ring:?}");
         }
     }
 
     #[test]
-    fn the_actions_ring_has_the_seven_actions_in_order() {
-        let m = build(SourceKind::Image(Fmt::Png), RingKind::Actions, 1, &all_ok());
-        assert_eq!(m.kind, RingKind::Actions);
-        let order: Vec<ActionKind> = m
-            .items
-            .iter()
-            .map(|i| match i.op {
-                Op::Action(a) => a,
-                Op::Convert(_) => panic!("conversion in the actions ring"),
-            })
-            .collect();
-        assert_eq!(order, ActionKind::ALL);
-        assert!(m.items.iter().all(|i| i.enabled));
-    }
-
-    #[test]
     fn compress_and_metadata_only_offer_formats_the_engine_handles() {
-        let m = build(SourceKind::Image(Fmt::Bmp), RingKind::Actions, 1, &all_ok());
+        let m = one(SourceKind::Image(Fmt::Bmp), RingKind::Actions);
         let by = |a: ActionKind| m.items.iter().find(|i| i.op == Op::Action(a)).unwrap();
         assert!(!by(ActionKind::Compress).enabled);
         assert_eq!(by(ActionKind::Compress).reason, Some(Reason::Formats("JPG, PNG, WEBP")));
         assert!(!by(ActionKind::Metadata).enabled);
         assert!(by(ActionKind::Crop).enabled);
-        let tiff = build(SourceKind::Image(Fmt::Tiff), RingKind::Actions, 1, &all_ok());
+        let tiff = one(SourceKind::Image(Fmt::Tiff), RingKind::Actions);
         assert!(tiff.items[1].enabled && !tiff.items[0].enabled, "TIFF has metadata but cannot be compressed");
     }
 
     #[test]
     fn dialog_actions_need_exactly_one_file_but_immediate_ones_batch() {
-        let m = build(SourceKind::Image(Fmt::Jpg), RingKind::Actions, 3, &all_ok());
+        let m = build(&[SourceKind::Image(Fmt::Jpg); 3], RingKind::Actions, 3, &all_ok());
         assert_eq!(m.items.len(), 7);
         for i in &m.items {
             let Op::Action(a) = i.op else { unreachable!() };
@@ -471,6 +687,8 @@ mod tests {
                 assert_eq!(i.reason, Some(Reason::OneFile));
             }
         }
+        let many = build(&[SourceKind::Pdf; 3], RingKind::Actions, 3, &all_ok());
+        assert!(many.items.iter().all(|i| i.enabled), "universal actions batch");
     }
 
     #[test]
@@ -485,6 +703,12 @@ mod tests {
             ("annotate", ActionKind::Annotate),
             ("addbg", ActionKind::AddBg),
             ("redact", ActionKind::Redact),
+            ("zip", ActionKind::Zip),
+            ("unzip", ActionKind::Unzip),
+            ("info", ActionKind::Info),
+            ("sha256", ActionKind::Checksum),
+            ("copypath", ActionKind::CopyPath),
+            ("reveal", ActionKind::Reveal),
         ] {
             assert_eq!(ActionKind::from_name(name), Some(a));
         }
