@@ -115,6 +115,32 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "opens an Explorer window; run with --ignored"]
+    fn reveal_opens_explorer_on_the_folder_of_the_file() {
+        let dir = std::env::temp_dir().join(format!("radial-reveal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("pick me.txt");
+        std::fs::write(&file, "x").unwrap();
+        reveal(&file).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let out = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.LocationURL }",
+            ])
+            .output()
+            .unwrap();
+        let urls = String::from_utf8_lossy(&out.stdout).to_string();
+        let name = dir.file_name().unwrap().to_string_lossy().to_string();
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("(New-Object -ComObject Shell.Application).Windows() | Where-Object {{ $_.LocationURL -like '*{name}*' }} | ForEach-Object {{ $_.Quit() }}")])
+            .output();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(urls.contains(&name), "no Explorer window for {name}: {urls}");
+    }
+
+    #[test]
     #[ignore = "replaces whatever is on the clipboard; run with --ignored"]
     fn text_round_trips_through_the_clipboard_including_unicode() {
         let text = "C:\\Users\\Alanm\\Música\\canción - ñandú ✓.txt\r\nsegunda línea";
