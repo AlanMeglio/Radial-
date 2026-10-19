@@ -23,6 +23,7 @@ use crate::geometry::sector_at;
 use crate::overlay::Spring;
 use crate::render::{self, clamp01, demo_scene, linear, solid, stroke, Backdrop, Face, Look, Renderer, Scene};
 use crate::ring::{RingKind, Switch};
+use crate::sectors::{self, Sector};
 use crate::theme::{self, FontKind, Rgba, Theme};
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -157,6 +158,10 @@ enum Act {
     Autostart,
     Tab(usize),
     Browse,
+    SectorAdd,
+    SectorEdit(usize),
+    SectorRemove(usize),
+    SectorUndo,
     Reset,
     Done,
     Next,
@@ -203,6 +208,10 @@ struct Ui {
     dark: bool,
     tab: usize,
     step: Option<usize>,
+    /// The user's own sectors, as last read from `sectors.txt`.
+    sectors: Vec<Sector>,
+    /// Sectors removed in this window, newest last, with the position they had: "Undo" puts them back.
+    removed: Vec<(usize, Sector)>,
     hits: Vec<Hit>,
     hot: Option<Act>,
     drag: Option<Sl>,
@@ -626,6 +635,110 @@ fn draw_autostart(p: &mut Pen, y: f32, cfg: &Config) {
     p.hit([r[0], r[1] - 3.0, r[2], r[3] + 6.0], Act::Autostart);
 }
 
+/// `t` shortened from the front ("...\Invoices") so it is at most `max` logical pixels wide.
+fn fit_tail(p: &mut Pen, t: &str, px: f32, max: f32) -> String {
+    let s = p.s;
+    let measure = |p: &mut Pen, t: &str| p.face.measure(t, px * s, 0.0) / s;
+    if measure(p, t) <= max {
+        return t.to_string();
+    }
+    let chars: Vec<char> = t.chars().collect();
+    for from in 1..chars.len() {
+        let cut: String = std::iter::once('\u{2026}').chain(chars[from..].iter().copied()).collect();
+        if measure(p, &cut) <= max {
+            return cut;
+        }
+    }
+    "\u{2026}".to_string()
+}
+
+const ROW_H: f32 = 48.0;
+const ROW_STEP: f32 = 54.0;
+
+/// The "My sectors" tab: one row per sector with Edit and Remove, or a sentence when there are none.
+fn draw_sectors_tab(p: &mut Pen, cfg: &Config, list: &[Sector], removed: Option<&String>) {
+    let l = cfg.lang;
+    let s = p.s;
+    if list.is_empty() {
+        let r = [RX, 84.0, RW, 112.0];
+        p.fill(r, RADIUS_CARD, p.pal.card);
+        p.outline(r, RADIUS_CARD, p.pal.border);
+        for (i, line) in tr(l, "sec-empty").split('|').enumerate() {
+            p.text(line, r[0] + 20.0, r[1] + 34.0 + i as f32 * 22.0, 13.0, p.pal.dim, 0.0);
+        }
+    }
+    for (i, sec) in list.iter().enumerate() {
+        let y = 84.0 + i as f32 * ROW_STEP;
+        let r = [RX, y, RW, ROW_H];
+        p.fill(r, RADIUS_CARD, p.pal.card);
+        p.outline(r, RADIUS_CARD, p.pal.border);
+        p.text(&sec.label, RX + 14.0, y + 18.0, 13.5, p.pal.text, 0.0);
+        // The kind and the extensions stay whole; a long path loses its beginning.
+        let what = tr(
+            l,
+            match sec.kind {
+                sectors::Kind::MoveTo => "sec-sum-move",
+                sectors::Kind::CopyTo => "sec-sum-copy",
+                sectors::Kind::OpenWith => "sec-sum-open",
+            },
+        );
+        let exts = if sec.exts.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", sec.exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" "))
+        };
+        let used = p.face.measure(&format!("{what}  {exts}"), 11.5 * s, 0.0) / s;
+        let path = fit_tail(p, &sec.target.display().to_string(), 11.5, RW - 14.0 - 124.0 - used);
+        p.text(&format!("{what}  {path}{exts}"), RX + 14.0, y + 35.0, 11.5, p.pal.dim, 0.0);
+        p.button(
+            [RX + RW - 12.0 - 28.0 - 8.0 - 64.0, y + 10.0, 64.0, 28.0],
+            tr(l, "sec-edit"),
+            Act::SectorEdit(i),
+            false,
+        );
+        p.button([RX + RW - 12.0 - 28.0, y + 10.0, 28.0, 28.0], "\u{00d7}", Act::SectorRemove(i), false);
+    }
+    if let Some(name) = removed {
+        let y = 84.0 + sectors::MAX_SECTORS as f32 * ROW_STEP + 10.0;
+        let t = tr(l, "sec-removed").replace("{}", name);
+        p.text(&t, RX, y, 12.0, p.pal.dim, 0.0);
+        if list.len() < sectors::MAX_SECTORS {
+            let x = RX + p.face.measure(&t, 12.0 * s, 0.0) / s + 10.0;
+            let label = tr(l, "sec-undo");
+            let w = p.face.measure(label, 12.0 * s, 0.0) / s;
+            let hot = p.hovered(Act::SectorUndo);
+            p.text(label, x, y, 12.0, p.pal.accent, 0.0);
+            p.fill([x, y + 8.0, w, if hot { 1.5 } else { 1.0 }], 0.5, p.pal.accent);
+            p.hit([x - 4.0, y - 10.0, w + 8.0, 22.0], Act::SectorUndo);
+        }
+    }
+}
+
+/// Sample sectors for the offscreen preview (`--sectors-demo`).
+fn demo_sectors() -> Vec<Sector> {
+    let mk = |label: &str, kind, target: &str, exts: &[&str]| Sector {
+        label: label.into(),
+        kind,
+        target: target.into(),
+        exts: exts.iter().map(|e| e.to_string()).collect(),
+    };
+    vec![
+        mk("Invoices", sectors::Kind::MoveTo, r"D:\Documents\Accounting\Invoices", &["pdf", "docx"]),
+        mk("USB", sectors::Kind::CopyTo, r"E:\", &[]),
+        mk("Editor", sectors::Kind::OpenWith, r"C:\Program Files\Notepad++\notepad++.exe", &["txt", "md", "json"]),
+        mk(
+            "Client work",
+            sectors::Kind::CopyTo,
+            r"C:\Users\someone\OneDrive - A Very Long Company Name\Projects\2026\Deliveries",
+            &["png", "jpg"],
+        ),
+    ]
+}
+
+fn demo_removed() -> Vec<(usize, Sector)> {
+    vec![(0, demo_sectors().remove(0))]
+}
+
 fn draw_step(p: &mut Pen, ui_step: usize, cfg: &Config, themes: &[Theme], theme: &Theme) {
     let l = cfg.lang;
     let keys = ["step1", "step2", "step3"];
@@ -711,6 +824,8 @@ fn draw_all(ui: &mut Ui) {
     let tab = ui.tab;
     let hot = ui.hot;
     let (cfg, themes) = (ui.cfg.clone(), ui.themes.clone());
+    let sector_list = ui.sectors.clone();
+    let removed_last = ui.removed.last().map(|(_, s)| s.label.clone());
     // Preview card background is drawn by the preview itself; here only its frame and the caption.
     draw_preview_card(ui, &pal);
     let mut pen = Pen { pm: &mut ui.pm, face: &mut ui.face, pal: &pal, s, hits: &mut ui.hits, hot };
@@ -730,7 +845,7 @@ fn draw_all(ui: &mut Ui) {
     pen.text("Radial", 64.0, 36.0, 18.0, pal.text, 0.0);
     match step {
         None => {
-            let labels = [tr(l, "tab-look"), tr(l, "tab-behavior")];
+            let labels = [tr(l, "tab-look"), tr(l, "tab-behavior"), tr(l, "tab-sectors")];
             let mut x = RX;
             for (i, lab) in labels.iter().enumerate() {
                 let w = pen.face.measure(lab, 13.5 * s, 0.0) / s + 28.0;
@@ -761,7 +876,8 @@ fn draw_all(ui: &mut Ui) {
 
     match step {
         None if tab == 0 => draw_look_tab(&mut pen, &cfg, &themes, &theme),
-        None => draw_behavior_tab(&mut pen, &cfg),
+        None if tab == 1 => draw_behavior_tab(&mut pen, &cfg),
+        None => draw_sectors_tab(&mut pen, &cfg, &sector_list, removed_last.as_ref()),
         Some(n) => draw_step(&mut pen, n, &cfg, &themes, &theme),
     }
     // Footer.
@@ -770,6 +886,24 @@ fn draw_all(ui: &mut Ui) {
         None => {
             if tab == 0 {
                 pen.button([RX, by, 150.0, 36.0], tr(l, "reset"), Act::Reset, false);
+            }
+            if tab == 2 {
+                let r = [RX, by, 170.0, 36.0];
+                if sector_list.len() < sectors::MAX_SECTORS {
+                    pen.button(r, tr(l, "sec-add"), Act::SectorAdd, false);
+                } else {
+                    // Full: shown but dead, so the limit is visible.
+                    pen.fill(r, RADIUS, pal.card_hi);
+                    pen.outline(r, RADIUS, pal.border);
+                    pen.text_c(
+                        tr(l, "sec-add"),
+                        r[0] + r[2] / 2.0,
+                        r[1] + r[3] / 2.0 + 0.5,
+                        13.0,
+                        pal.dim.fade(0.6),
+                        0.0,
+                    );
+                }
             }
             pen.button([RX + RW - 130.0, by, 130.0, 36.0], tr(l, "done"), Act::Done, true);
         }
@@ -1084,7 +1218,7 @@ fn slider_from_x(ui: &mut Ui, id: Sl, x: f32) {
     set_slider(&mut ui.cfg, id, t);
 }
 
-unsafe fn pick_folder(owner: HWND, title: &str) -> Option<String> {
+pub(crate) unsafe fn pick_folder(owner: HWND, title: &str) -> Option<String> {
     let t = wide(title);
     let bi = BrowseInfo {
         owner: owner as isize,
@@ -1203,8 +1337,55 @@ fn do_act(ui: &mut Ui, act: Act) {
                 redraw(ui);
             }
         }
-        Act::Browse => {}
+        Act::Browse | Act::SectorAdd | Act::SectorEdit(_) => {}
+        Act::SectorRemove(i) => {
+            if remove_sector(&mut ui.sectors, &mut ui.removed, i) {
+                store_sectors(ui);
+            }
+            redraw(ui);
+        }
+        Act::SectorUndo => {
+            if restore_sector(&mut ui.sectors, &mut ui.removed) {
+                store_sectors(ui);
+            }
+            redraw(ui);
+        }
     }
+}
+
+/// Takes sector `i` out of the list, remembering it (and where it was) for "Undo".
+fn remove_sector(list: &mut Vec<Sector>, removed: &mut Vec<(usize, Sector)>, i: usize) -> bool {
+    if i >= list.len() {
+        return false;
+    }
+    removed.push((i, list.remove(i)));
+    true
+}
+
+/// Puts the newest removed sector back where it was, if there is room.
+fn restore_sector(list: &mut Vec<Sector>, removed: &mut Vec<(usize, Sector)>) -> bool {
+    if list.len() >= sectors::MAX_SECTORS {
+        return false;
+    }
+    let Some((i, s)) = removed.pop() else { return false };
+    list.insert(i.min(list.len()), s);
+    true
+}
+
+/// Writes the list; when that fails the window goes back to what the file says.
+fn store_sectors(ui: &mut Ui) {
+    if sectors::save(&ui.sectors).is_err() {
+        ui.sectors = sectors::load();
+        ui.removed.clear();
+    }
+}
+
+/// The sector editor saved: read the file again and redraw, so the tab is up to date without reopening Settings.
+pub(crate) fn sectors_changed() {
+    with_ui(|ui| {
+        ui.sectors = sectors::load();
+        redraw(ui);
+    });
 }
 
 fn default_out_dir() -> String {
@@ -1370,6 +1551,8 @@ unsafe fn build_ui(
         dark,
         tab: 0,
         step,
+        sectors: sectors::load(),
+        removed: Vec::new(),
         hits: vec![],
         hot: None,
         drag: None,
@@ -1405,6 +1588,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             .flatten();
             match act {
                 Some(Act::Slider(_)) | None => {}
+                Some(Act::SectorAdd) => crate::dialogs::open_sector_editor(None),
+                Some(Act::SectorEdit(i)) => crate::dialogs::open_sector_editor(Some(i)),
                 Some(Act::Browse) => {
                     let lang = crate::current_config().lang;
                     let picked = pick_folder(hwnd, tr(lang, "folder-pick"));
@@ -1616,6 +1801,8 @@ pub fn cli(args: &[String]) -> bool {
         dark: !args.iter().any(|a| a == "--light"),
         tab: get("--tab").and_then(|v| v.parse().ok()).unwrap_or(0),
         step: get("--step").and_then(|v| v.parse().ok()),
+        sectors: if args.iter().any(|a| a == "--sectors-demo") { demo_sectors() } else { sectors::load() },
+        removed: if args.iter().any(|a| a == "--sectors-demo") { demo_removed() } else { Vec::new() },
         hits: vec![],
         hot: None,
         drag: None,
@@ -1683,6 +1870,60 @@ mod tests {
         assert_ne!(palette(false, white).accent, white);
         assert_ne!(palette(true, black).accent, black);
         assert_eq!(palette(true, white).accent, white);
+    }
+
+    fn sec(label: &str) -> Sector {
+        Sector { label: label.into(), kind: sectors::Kind::MoveTo, target: r"C:\x".into(), exts: vec![] }
+    }
+
+    fn labels(list: &[Sector]) -> Vec<&str> {
+        list.iter().map(|s| s.label.as_str()).collect()
+    }
+
+    #[test]
+    fn removing_a_sector_can_be_undone_into_its_old_place() {
+        let mut list = vec![sec("a"), sec("b"), sec("c")];
+        let mut gone = Vec::new();
+        assert!(remove_sector(&mut list, &mut gone, 1));
+        assert!(remove_sector(&mut list, &mut gone, 0));
+        assert_eq!(labels(&list), ["c"]);
+        assert!(!remove_sector(&mut list, &mut gone, 5), "an index past the end removes nothing");
+        assert!(restore_sector(&mut list, &mut gone));
+        assert_eq!(labels(&list), ["a", "c"]);
+        assert!(restore_sector(&mut list, &mut gone));
+        assert_eq!(labels(&list), ["a", "b", "c"]);
+        assert!(!restore_sector(&mut list, &mut gone), "nothing left to undo");
+    }
+
+    #[test]
+    fn undo_is_refused_when_the_list_filled_up_meanwhile() {
+        let mut list: Vec<Sector> = (0..sectors::MAX_SECTORS).map(|i| sec(&format!("s{i}"))).collect();
+        let mut gone = Vec::new();
+        assert!(remove_sector(&mut list, &mut gone, 2));
+        list.push(sec("new"));
+        assert!(!restore_sector(&mut list, &mut gone));
+        assert_eq!((list.len(), gone.len()), (sectors::MAX_SECTORS, 1), "the removed one is kept for later");
+    }
+
+    #[test]
+    fn the_tab_strings_exist_in_both_languages() {
+        for key in [
+            "tab-sectors",
+            "sec-sum-move",
+            "sec-sum-copy",
+            "sec-sum-open",
+            "sec-edit",
+            "sec-add",
+            "sec-empty",
+            "sec-removed",
+            "sec-undo",
+        ] {
+            for l in [Lang::En, Lang::Es] {
+                assert!(!tr(l, key).is_empty(), "{key}");
+            }
+        }
+        assert_eq!(tr(Lang::Es, "tab-sectors"), "Mis sectores");
+        assert_eq!(tr(Lang::En, "sec-empty").split('|').count(), tr(Lang::Es, "sec-empty").split('|').count());
     }
 
     #[test]
