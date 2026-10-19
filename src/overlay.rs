@@ -764,16 +764,18 @@ unsafe fn run(op: Op, files: Vec<PathBuf>) {
     let cfg = crate::current_config();
     match op {
         Op::Convert(target) => {
-            std::thread::spawn(move || jobs::convert(target, files, cfg));
+            std::thread::spawn(move || jobs::guarded(cfg.lang, move || jobs::convert(target, files, cfg)));
         }
         Op::Custom(index) => {
-            std::thread::spawn(move || crate::universal::run_custom(index, files, cfg));
+            std::thread::spawn(move || {
+                jobs::guarded(cfg.lang, move || crate::universal::run_custom(index, files, cfg))
+            });
         }
         Op::Action(a @ (ActionKind::Compress | ActionKind::Metadata)) => {
-            std::thread::spawn(move || jobs::immediate(a, files, cfg));
+            std::thread::spawn(move || jobs::guarded(cfg.lang, move || jobs::immediate(a, files, cfg)));
         }
         Op::Action(a) if a.is_immediate() => {
-            std::thread::spawn(move || crate::universal::run(a, files, cfg));
+            std::thread::spawn(move || jobs::guarded(cfg.lang, move || crate::universal::run(a, files, cfg)));
         }
         Op::Action(a) => {
             let idx = a.id();

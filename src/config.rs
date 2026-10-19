@@ -480,6 +480,11 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("grp-video", "Video", "Video"),
     ("grp-programs", "Programs", "Programas"),
     ("zip-skipped", " ({} left out: in use, a link or unreadable)", " ({} se dejaron fuera: en uso, un acceso directo o ilegibles)"),
+    (
+        "crashed",
+        "Radial hit an unexpected problem with that file and stopped it (see crash.log in %APPDATA%\\radial)",
+        "Radial tuvo un problema inesperado con ese archivo y lo detuvo (mira crash.log en %APPDATA%\\radial)",
+    ),
     ("zip-done", "{} created: {} files, {} -> {} ({})", "{} creado: {} archivos, {} -> {} ({})"),
     ("unzip-done", "Extracted {} files to {}", "Se extrajeron {} archivos en {}"),
     ("unzip-many", "Extracted {} files from {} archives", "Se extrajeron {} archivos de {} zips"),

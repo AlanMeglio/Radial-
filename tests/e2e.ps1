@@ -220,7 +220,10 @@ $cases = @(
     @{ Name = "TXT documents ring: PDF"; File = "notes.txt"; N = 4; I = 3; Want = { Exists "notes.pdf" } },
     @{ Name = "TXT documents ring: DOCX"; File = "notes.txt"; N = 4; I = 0; Want = { Exists "notes.docx" } },
     # --- spreadsheets
-    @{ Name = "XLSX documents ring: CSV (a date stays a date, a comma stays quoted)"; File = "budget.xlsx"; N = 5; I = 0; Want = { (Exists "budget.csv") -and ((Get-Content "$Out\budget.csv" -Raw) -match "2024-01-01") -and ((Get-Content "$Out\budget.csv" -Raw) -match '"Licences, annual"') } },
+    @{ Name = "XLSX documents ring: CSV (a date stays a date, the Windows list separator splits the columns)"; File = "budget.xlsx"; N = 5; I = 0; Want = {
+        $sep = (Get-Culture).TextInfo.ListSeparator; $csv = Get-Content "$Out\budget.csv" -Raw -Encoding UTF8
+        $quoted = if ($sep -eq ",") { '"Licences, annual"' } else { 'Licences, annual' }
+        (Exists "budget.csv") -and $csv.Contains("Item${sep}Due${sep}Cost") -and $csv.Contains("2024-01-01") -and $csv.Contains($quoted) } },
     @{ Name = "XLSX documents ring: TXT"; File = "budget.xlsx"; N = 5; I = 3; Want = { Exists "budget.txt" } },
     @{ Name = "XLSX documents ring: PDF"; File = "budget.xlsx"; N = 5; I = 4; Want = { Exists "budget.pdf" } },
     @{ Name = "XLSX documents ring: PNG"; File = "budget.xlsx"; N = 5; I = 2; Want = { Exists "budget.png" } },

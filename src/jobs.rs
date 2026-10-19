@@ -51,6 +51,34 @@ pub fn fill(template: &str, args: &[&str]) -> String {
     out
 }
 
+/// Runs one job (a conversion, an action) so that a bug triggered by one odd file ends that job with a notice instead
+/// of taking the whole tray program down: the panic is caught here, written to `crash.log` by the panic hook and
+/// reported.
+pub fn guarded(lang: Lang, job: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+        notice(tr(lang, "crashed").to_string(), true);
+    }
+}
+
+/// Writes every panic (message and place) to `%APPDATA%\radial\crash.log`, keeping the file small, so a bug report
+/// can include it. Radial has no console, so without this a crash would leave no trace at all.
+pub fn install_crash_log() {
+    std::panic::set_hook(Box::new(|info| {
+        let Some(dir) = crate::config::data_dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("crash.log");
+        let old = std::fs::read_to_string(&file).unwrap_or_default();
+        let keep = old.len().saturating_sub(48 * 1024);
+        let keep = (keep..old.len()).find(|&i| old.is_char_boundary(i)).unwrap_or(old.len());
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let thread = std::thread::current();
+        let _ = std::fs::write(
+            &file,
+            format!("{}[{stamp}] thread {:?}: {info}\n", &old[keep..], thread.name().unwrap_or("?")),
+        );
+    }));
+}
+
 /// Asks the tray window to show a result: a balloon and/or a sound, as the user configured.
 pub fn notice(text: String, failed: bool) {
     let boxed = Box::into_raw(Box::new((text, failed)));
@@ -278,5 +306,21 @@ mod tests {
         assert!(msg.contains("c.png"), "{msg}");
         assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "no clean copy for a file with nothing to remove");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_panic_in_a_job_is_caught_and_the_program_goes_on() {
+        let ran = std::cell::Cell::new(false);
+        // The hook of the test harness prints the panic; what matters is that it does not escape.
+        guarded(Lang::En, || {
+            ran.set(true);
+            if ran.get() {
+                panic!("a bug triggered by one odd file");
+            }
+        });
+        assert!(ran.get(), "the job ran, panicked, and guarded returned");
+        let mut finished = false;
+        guarded(Lang::En, || finished = true);
+        assert!(finished, "a job that does not panic just runs");
     }
 }

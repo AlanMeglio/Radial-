@@ -48,8 +48,8 @@ and hovering it says why in the pill under the ring: `AVIF encoding needs ...` w
 | **A picture** (PNG, JPG, WEBP, GIF, TIFF, BMP, HEIC, AVIF) | any other picture format, PDF, DOCX, **TXT** (reads the text with Windows OCR) |
 | **A PDF** | JPG, PNG, WEBP... (one picture per page), TXT, DOCX |
 | **A Word file** (.docx) | PDF, TXT, any picture format |
-| **A text file** (txt, md, log, json, xml, ini, rtf, html) | PDF, DOCX, any picture format |
-| **A workbook** (.xlsx) | **CSV** (one per sheet; dates stay dates, commas stay quoted), TXT, PDF, pictures |
+| **A text file** (txt, md, log, json, xml, yaml, ini) | PDF, DOCX, any picture format |
+| **A workbook** (.xlsx) | **CSV** (one per sheet; dates stay dates; cells that start like a formula get a leading apostrophe so Excel cannot run them), TXT, PDF, pictures |
 | **A CSV or TSV** | **XLSX**, PDF, pictures |
 | **Several files that can all be a PDF** | **MERGE**: one PDF, in natural order (`file2` before `file10`) |
 
@@ -65,23 +65,24 @@ and hovering it says why in the pill under the ring: `AVIF encoding needs ...` w
 | **EDIT** | Dialog: rotate, flip, resize (with or without keeping proportions), grayscale, brightness, contrast, with a live preview. |
 | **ANNOTATE** | Dialog: pen, line, arrow, box, ellipse, marker, text; colour, size, undo. A filled black box is how you black something out: the saved copy has those pixels replaced, not covered. |
 | **ADD BG** | Dialog: ten gradients and colours, your own colour or a picture as background; Padding, Corners and Shadow sliders; canvas ratio Auto, 1:1, 16:9, 4:5. |
-| **SPLIT** (PDF) | One PDF per page in a new folder `name pages`. Text stays text, fonts and vector art are copied untouched. |
+| **SPLIT** (PDF) | One PDF per page in a new folder `name pages`. Text stays text, fonts and vector art are copied untouched. Links, bookmarks and the document properties are dropped on purpose (privacy); typed values in form fields are not kept. |
 
 ### Files ring (works on any file)
 
 | Sector | What happens |
 | --- | --- |
 | **RENAME** | Dialog with a live preview of every new name: find and replace, case, spaces, remove accents, prefix and suffix, numbering, date (modified, created or EXIF taken), lowercase extension. Conflicts are shown in red and block the button; nothing is ever overwritten. Works on thousands of files at once. |
-| **ZIP** | Packs files and folders into one `.zip`, streaming (constant memory, no matter how big). Already-compressed files (JPG, MP4, ZIP...) are stored, not deflated again. |
-| **INFO** | Name, type, size, dates, and for Word, Excel and PowerPoint the author, last editor, company and pages; for PDF the title, author, producer and pages. Also copied to the clipboard. |
-| **SHA-256** | Copies the file's hash. If the clipboard already holds a hash (from a download page, or `sha256sum` output) it **verifies** instead and tells you whether they match, leaving your clipboard alone. |
+| **ZIP** | Packs files and folders into one `.zip`, streaming (constant memory; up to 4 GiB and 65,534 entries). Already-compressed files (JPG, MP4, ZIP...) are stored, not deflated again. A file that is in use or unreadable is left out and the notice says how many. |
+| **INFO** (files) | Name, type, size, dates, and for Word, Excel and PowerPoint the author, last editor, company and pages; for PDF the title, author, producer and pages. Also copied to the clipboard. |
+| **SHA-256** (files) | Copies the file's hash. If the clipboard already holds a hash (from a download page, or `sha256sum` output) it **verifies** instead and tells you whether they match, leaving your clipboard alone. |
 | **COPY PATH** | The full path on the clipboard (one per line for several files). |
 | **REVEAL** | Opens Explorer with the file selected. |
-| **UNZIP** (ZIPs only) | Extracts next to the archive into a folder of its own. Refuses `..` paths, absolute paths, device names and zip bombs; never overwrites; removes what it extracted if anything is wrong. |
+| **UNZIP** (ZIPs only) | Extracts next to the archive into a folder of its own. Refuses `..` paths, absolute paths, device names, links and zip bombs (judged per entry and for the whole archive); never overwrites; removes what it extracted if anything is wrong. |
 | **SORT** (folders only) | Asks "by type or by month?" and moves the loose files into subfolders. Subfolders, unknown file types, hidden files and half-downloaded files stay where they are. Nothing is overwritten. |
 
-**Undo.** Rename and Sort write what they did to a log; the tray menu has **Undo last rename or sort**. Files that
-changed or vanished since are left alone and counted.
+**Undo.** Rename, Sort and the moves of your own sectors write what they did to a log; the tray menu has **Undo last
+rename or sort**. Files that changed or vanished since are left alone and counted, and the folders a sort made go
+again if they are empty.
 
 ### Your own sectors
 
@@ -133,15 +134,15 @@ ANNOTATE), and DPI aware. They are created when you drop and every buffer is fre
 | --- | --- | --- | --- |
 | PNG, JPG, BMP, TIFF | yes | yes | Pure Rust. JPG output flattens transparency onto white. The EXIF orientation is applied when reading. |
 | WEBP | yes | yes | Pure Rust, output is **lossless**. |
-| GIF | yes | yes | First frame only: animations become a still picture. |
+| GIF | yes | no | First frame only: animations become a still picture. No sector writes GIF. |
 | HEIC | needs Windows | needs Windows | Through the Windows codec ("HEIF Image Extensions" from the Microsoft Store). Without it the sector is greyed out and says so. |
 | AVIF | needs Windows | **off by default** | Reading needs the Store's "AV1 Video Extension". Windows ships no AVIF encoder, so the sector is greyed out unless you build with `--features avif-encode` (pure-Rust rav1e, about +2.3 MB and slow on big pictures). |
-| PDF | yes | yes | Pages are rendered with the Windows PDF engine (`Windows.Data.Pdf`); text comes from the text layer, or from Windows OCR for scans. Merge and split copy the real content byte for byte. Password-protected PDFs are refused. |
+| PDF | yes | yes | Pages are rendered with the Windows PDF engine (`Windows.Data.Pdf`); text comes from the text layer, or from Windows OCR for scans. Merge and split copy the real content byte for byte. Password-protected PDFs are refused, including ones that only have an owner password. |
 | DOCX | yes | yes | Text, page breaks and pictures. Word opens the result; other editors were not tested. Layout and styles are not kept. |
 | XLSX | yes | yes | Reads shared and inline strings, dates (1900 and 1904 systems), percentages and cached formula values; hidden sheets are skipped; up to 5 million cells. Old `.xls` and password-protected files are refused with a clear message. Writing produces a clean workbook (no personal data) that Excel, LibreOffice and pandas open. |
-| CSV, TSV | yes | yes | UTF-8 with BOM out (Excel opens it right), the delimiter (`,` `;` tab `|`) is detected on the way in. |
+| CSV, TSV | yes | yes | Out: UTF-8 with BOM and **your Windows list separator** (`;` in much of Europe and Latin America), which is what makes Excel open it in columns. In: the delimiter (`,` `;` tab `|`) is detected. |
 | TXT | yes | yes | UTF-8, UTF-16 with a BOM or Windows-1252 are detected. |
-| ZIP | yes | yes | Stored and deflate, no encryption, no zip64 (4 GiB and 65,535 entries per archive). |
+| ZIP | yes | yes | Stored and deflate, no encryption, no zip64 (4 GiB and 65,534 entries per archive). |
 
 Reading text out of pictures uses the OCR languages of your Windows profile (Settings > Time & language). Without one,
 the sector is greyed out and says so.
@@ -293,6 +294,12 @@ Measured on the release build (Windows 11, one machine, so treat the numbers as 
 - The menu is built from the first 200 files of a very large drag; the rest are handled (and refused one by one when
   they do not fit) when the action runs.
 - PDF to DOCX keeps the text, not the layout; a table too long for a PDF (over 20,000 rows) is refused and points to CSV.
+- A PDF whose fonts have no text map (some generated by reportlab or old tools) gives no text layer, so COPY TEXT and
+  PDF to TXT read it with Windows OCR, which is slower and less exact.
+- A workbook is refused when it holds more than 5 million cells or 256 MB of text, a file when it is over 512 MB, and
+  merging stops at 1 GB of input.
+- If Radial ever hits a bug with a file it stops that job, tells you, and writes the details to
+  `%APPDATA%adial\crash.log` (attach it to a bug report); the rest of the program keeps running.
 - Sector and dialog texts are English and Spanish; the reasons Windows codecs give for being unavailable are in
   English.
 - Windows 11 is the target; the tray menu, settings window and drag handling use only long-standing Win32 calls.

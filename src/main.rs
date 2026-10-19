@@ -424,7 +424,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             ID_UNDO => {
                 let lang = current_config().lang;
-                std::thread::spawn(move || universal::undo_last(lang));
+                std::thread::spawn(move || jobs::guarded(lang, move || universal::undo_last(lang)));
             }
             ID_ABOUT => about(hwnd),
             _ => {}
@@ -454,6 +454,7 @@ unsafe fn open_standalone(action: ring::ActionKind, file: std::path::PathBuf) {
 }
 
 fn main() {
+    jobs::install_crash_log();
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         // Command line modes print (`--help`, `--formats`, `--bench`, usage errors): make that visible in a terminal.
