@@ -66,6 +66,26 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
 }
 
+/// One PDF made of every file, in the order given: PDFs are used as they are (vector content and text stay), pictures,
+/// Word, text, CSV and workbooks go through their PDF conversion first. Anything else is `Unsupported`.
+pub fn merge_to_pdf(paths: &[PathBuf]) -> Result<Vec<u8>> {
+    let opts = ConvertOptions::default();
+    let mut parts: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let input = io::read_limited(path)?;
+        let ext = path.extension().and_then(|e| e.to_str());
+        let kind = detect_head(ext, &input[..input.len().min(HEAD_LEN)])
+            .filter(|&k| k == SourceKind::Pdf || super::kind::supports(k, Target::Pdf))
+            .ok_or_else(|| Error::Unsupported(format!("{}: cannot be turned into PDF pages", path.display())))?;
+        if kind == SourceKind::Pdf {
+            parts.push(input);
+        } else {
+            parts.extend(convert_bytes(&input, kind, Target::Pdf, &opts)?.into_iter().map(|a| a.data));
+        }
+    }
+    super::pdftools::merge_pdfs(&parts)
+}
+
 /// The text a picture or a PDF holds: a PDF's own text layer, or Windows OCR for a picture and for a scanned PDF.
 /// Fails with `Unsupported` when no text is found.
 pub fn text_of(input: &[u8], kind: SourceKind) -> Result<String> {

@@ -846,6 +846,26 @@ impl Undo {
         Ok(target)
     }
 
+    /// The newest undo file in `%APPDATA%\radial\undo`, if there is one.
+    pub fn latest_file() -> Option<PathBuf> {
+        let dir = crate::config::data_dir()?.join("undo");
+        Self::latest_in(&dir)
+    }
+
+    /// The newest `rename-<seconds>.txt` in `dir`.
+    pub fn latest_in(dir: &Path) -> Option<PathBuf> {
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let n: u64 = name.strip_prefix("rename-")?.strip_suffix(".txt")?.parse().ok()?;
+                Some((n, e.path()))
+            })
+            .max_by_key(|(n, _)| *n)
+            .map(|(_, p)| p)
+    }
+
     pub fn load(file: &Path) -> Result<Undo> {
         let text = std::fs::read_to_string(file)?;
         let mut lines = text.lines();
@@ -1677,5 +1697,18 @@ mod tests {
         let mut v = vec!["f10", "f9", "F1", "f100", "f2"];
         v.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(v, ["F1", "f2", "f9", "f10", "f100"]);
+    }
+
+    #[test]
+    fn the_newest_undo_file_is_the_one_with_the_biggest_number() {
+        let d = std::env::temp_dir().join(format!("radial-undo-latest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(Undo::latest_in(&d), None);
+        for n in ["rename-9.txt", "rename-100.txt", "rename-20.txt", "other.txt", "rename-x.txt"] {
+            std::fs::write(d.join(n), "x").unwrap();
+        }
+        assert_eq!(Undo::latest_in(&d), Some(d.join("rename-100.txt")), "numbers, not text order");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -58,6 +58,37 @@ pub fn copy_text(text: &str) -> Result<(), String> {
     }
 }
 
+/// The answer to [`ask_yes_no_cancel`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Yes,
+    No,
+    Cancel,
+}
+
+/// A native Yes / No / Cancel box in front of everything, for the few things that must be confirmed before files
+/// move. Blocks the calling thread (never call it from the UI thread of the overlay).
+pub fn ask_yes_no_cancel(title: &str, text: &str) -> Answer {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDNO, IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNOCANCEL,
+    };
+    let (t, c) = (wide(title), wide(text));
+    // SAFETY: both strings are NUL terminated and outlive the call.
+    let r = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            c.as_ptr(),
+            t.as_ptr(),
+            MB_YESNOCANCEL | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
+        )
+    };
+    match r {
+        IDYES => Answer::Yes,
+        IDNO => Answer::No,
+        _ => Answer::Cancel,
+    }
+}
+
 /// The Unicode text on the clipboard, if there is any.
 pub fn paste_text() -> Option<String> {
     use windows_sys::Win32::System::DataExchange::GetClipboardData;

@@ -45,6 +45,7 @@ const ID_SETTINGS: usize = 2;
 const ID_PAUSE: usize = 3;
 const ID_AUTOSTART: usize = 4;
 const ID_ABOUT: usize = 5;
+const ID_UNDO: usize = 6;
 /// Test knob: `RADIAL_ANY_SURFACE=1` accepts drags that start anywhere (used by the end-to-end script).
 static ANY_SURFACE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
@@ -369,6 +370,7 @@ unsafe fn tray_menu(hwnd: HWND) {
     let paused = PAUSED.load(Relaxed);
     item(ID_PAUSE, if paused { "resume" } else { "pause" }, false);
     item(ID_AUTOSTART, "startup", cfg.autostart);
+    item(ID_UNDO, "undo-last", false);
     item(ID_ABOUT, "about", false);
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     item(ID_QUIT, "quit", false);
@@ -418,6 +420,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 let mut c = current_config();
                 c.autostart = !c.autostart;
                 set_config(c);
+            }
+            ID_UNDO => {
+                let lang = current_config().lang;
+                std::thread::spawn(move || universal::undo_last(lang));
             }
             ID_ABOUT => about(hwnd),
             _ => {}
