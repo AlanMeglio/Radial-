@@ -13,6 +13,7 @@ mod edit;
 pub mod geom;
 mod rename;
 mod resize;
+mod sector;
 pub mod ui;
 
 use std::cell::RefCell;

@@ -15,6 +15,7 @@ mod menus;
 mod overlay;
 mod render;
 mod ring;
+mod sectors;
 mod settings;
 mod shell;
 mod theme;
