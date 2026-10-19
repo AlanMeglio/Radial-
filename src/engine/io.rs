@@ -8,18 +8,26 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Largest input file the engine will read into memory.
 pub const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 
+fn too_big(path: &Path) -> Error {
+    Error::Unsupported(format!(
+        "{} is larger than {} MB, which is more than Radial reads into memory",
+        path.display(),
+        MAX_INPUT_BYTES >> 20
+    ))
+}
+
 pub fn read_limited(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     let file = std::fs::File::open(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if len > MAX_INPUT_BYTES {
-        return Err(Error::TooLarge { width: 0, height: 0 });
+        return Err(too_big(path));
     }
     let mut buf = Vec::with_capacity(len as usize);
     // `take` also bounds files that grow while we read them.
     file.take(MAX_INPUT_BYTES + 1).read_to_end(&mut buf).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
     if buf.len() as u64 > MAX_INPUT_BYTES {
-        return Err(Error::TooLarge { width: 0, height: 0 });
+        return Err(too_big(path));
     }
     Ok(buf)
 }

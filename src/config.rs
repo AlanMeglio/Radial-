@@ -479,6 +479,7 @@ pub const STRINGS: &[(&str, &str, &str)] = &[
     ("grp-audio", "Audio", "Audio"),
     ("grp-video", "Video", "Video"),
     ("grp-programs", "Programs", "Programas"),
+    ("zip-skipped", " ({} left out: in use, a link or unreadable)", " ({} se dejaron fuera: en uso, un acceso directo o ilegibles)"),
     ("zip-done", "{} created: {} files, {} -> {} ({})", "{} creado: {} archivos, {} -> {} ({})"),
     ("unzip-done", "Extracted {} files to {}", "Se extrajeron {} archivos en {}"),
     ("unzip-many", "Extracted {} files from {} archives", "Se extrajeron {} archivos de {} zips"),

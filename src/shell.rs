@@ -3,6 +3,9 @@
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{GlobalFree, HANDLE};
+use windows_sys::Win32::System::Com::{
+    CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+};
 use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -124,15 +127,22 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     let arg = format!("/select,\"{}\"", path.display());
     let (verb, exe, params) = (wide("open"), wide("explorer.exe"), wide(&arg));
     // SAFETY: all strings are NUL terminated and outlive the call; ShellExecuteW returns a value above 32 on success.
+    // The shell wants COM on the calling thread (this runs on a worker); the uninitialise matches a successful init.
     let code = unsafe {
-        ShellExecuteW(
+        let flags = (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32;
+        let com = CoInitializeEx(std::ptr::null(), flags) >= 0;
+        let code = ShellExecuteW(
             std::ptr::null_mut(),
             verb.as_ptr(),
             exe.as_ptr(),
             params.as_ptr(),
             std::ptr::null(),
             SW_SHOWNORMAL,
-        ) as isize
+        ) as isize;
+        if com {
+            CoUninitialize();
+        }
+        code
     };
     if code > 32 {
         Ok(())

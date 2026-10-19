@@ -71,7 +71,10 @@ pub fn free_name(dir: &Path, base: &str, ext: Option<&str>) -> PathBuf {
 /// What to call the archive for these files: the file's own name, or the folder's name for several.
 pub fn zip_base(files: &[PathBuf]) -> String {
     match files {
-        [one] => one.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into()),
+        [one] => {
+            let name = if one.is_dir() { one.file_name() } else { one.file_stem() };
+            name.map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into())
+        }
         many => many
             .first()
             .and_then(|f| f.parent())
@@ -92,7 +95,7 @@ fn zip(files: &[PathBuf], cfg: &Config) -> Result<Option<String>, String> {
     let Some(kept) = place(&base, dest, cfg)? else {
         return Ok(Some(fill(tr(l, "skipped"), &[&format!("{}.zip", zip_base(files))])));
     };
-    Ok(Some(fill(
+    let mut text = fill(
         tr(l, "zip-done"),
         &[
             &name_of(&kept),
@@ -101,7 +104,12 @@ fn zip(files: &[PathBuf], cfg: &Config) -> Result<Option<String>, String> {
             &human_size(report.bytes_out),
             &percent_change(report.bytes_in, report.bytes_out),
         ],
-    )))
+    );
+    // A backup that silently misses a file is worse than no backup: say so.
+    if report.skipped > 0 {
+        text += &fill(tr(l, "zip-skipped"), &[&report.skipped.to_string()]);
+    }
+    Ok(Some(text))
 }
 
 fn unzip(files: &[PathBuf], cfg: &Config) -> Result<Option<String>, String> {
@@ -151,6 +159,19 @@ pub fn hash_in(text: &str) -> Option<String> {
     (token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())).then(|| token.to_ascii_lowercase())
 }
 
+/// The text the checksum action last put on the clipboard itself, so the next drop does not mistake it for a
+/// reference hash to verify against.
+static LAST_COPIED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn reference_hash() -> Option<String> {
+    let clip = shell::paste_text()?;
+    let own = LAST_COPIED.lock().map(|g| g.clone()).unwrap_or_default();
+    if !own.is_empty() && clip.trim() == own.trim() {
+        return None;
+    }
+    hash_in(&clip)
+}
+
 /// SHA-256 of every file. When the clipboard already holds a hash this *verifies* against it (a download page's
 /// checksum, say) and leaves the clipboard alone; otherwise it copies the hash.
 fn checksum(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
@@ -159,7 +180,7 @@ fn checksum(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
         let h = fileops::sha256_file(f).map_err(|e| format!("{}: {e}", name_of(f)))?;
         lines.push((h, name_of(f)));
     }
-    if let Some(expected) = shell::paste_text().as_deref().and_then(hash_in) {
+    if let Some(expected) = reference_hash() {
         let hit = lines.iter().find(|(h, _)| *h == expected);
         return Ok(Some(match (hit, lines.as_slice()) {
             (Some((_, n)), _) => fill(tr(l, "checksum-ok"), &[n, &short_hash(&expected)]),
@@ -172,6 +193,9 @@ fn checksum(files: &[PathBuf], l: Lang) -> Result<Option<String>, String> {
         many => many.iter().map(|(h, n)| format!("{h}  {n}")).collect::<Vec<_>>().join("\r\n"),
     };
     shell::copy_text(&text)?;
+    if let Ok(mut last) = LAST_COPIED.lock() {
+        *last = text.clone();
+    }
     Ok(Some(match lines.as_slice() {
         [(h, n)] => fill(tr(l, "checksum-one"), &[&short_hash(h), n]),
         many => fill(tr(l, "checksum-many"), &[&many.len().to_string()]),

@@ -66,12 +66,23 @@ fn unsupported(kind: SourceKind, to: Target) -> Error {
     Error::Unsupported(format!("cannot convert {from} to {}", to.label()))
 }
 
+/// Most input bytes one merge reads into memory at once.
+const MAX_MERGE_BYTES: u64 = 1 << 30;
+
 /// One PDF made of every file, in the order given: PDFs are used as they are (vector content and text stay), pictures,
 /// Word, text, CSV and workbooks go through their PDF conversion first. Anything else is `Unsupported`.
 pub fn merge_to_pdf(paths: &[PathBuf]) -> Result<Vec<u8>> {
     let opts = ConvertOptions::default();
     let mut parts: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
+    let mut total = 0u64;
     for path in paths {
+        total += std::fs::metadata(path).map_or(0, |m| m.len());
+        if total > MAX_MERGE_BYTES {
+            return Err(Error::Unsupported(format!(
+                "these files add up to more than {} MB; merge fewer at a time",
+                MAX_MERGE_BYTES >> 20
+            )));
+        }
         let input = io::read_limited(path)?;
         let ext = path.extension().and_then(|e| e.to_str());
         let kind = detect_head(ext, &input[..input.len().min(HEAD_LEN)])
