@@ -55,11 +55,13 @@ impl Aspect {
         }
     }
 
+    #[cfg(test)]
     pub fn from_label(s: &str) -> Option<Aspect> {
         Aspect::ALL.into_iter().find(|a| a.label().eq_ignore_ascii_case(s.trim()))
     }
 
     /// Width divided by height; `None` for free.
+    #[cfg(test)]
     pub fn value(self) -> Option<f64> {
         match self {
             Aspect::Free => None,
@@ -69,6 +71,7 @@ impl Aspect {
 }
 
 /// Largest centered rectangle of the given aspect inside the image (what the dialog selects first).
+#[cfg(test)]
 pub fn largest_centered(bw: u32, bh: u32, aspect: Aspect) -> Rect {
     let Aspect::Ratio(rw, rh) = aspect else { return Rect::new(0, 0, bw, bh) };
     if bw == 0 || bh == 0 {

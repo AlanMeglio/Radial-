@@ -23,9 +23,6 @@ pub struct MetaEntry {
 
 #[derive(Clone, Debug)]
 pub struct MetaReport {
-    pub fmt: Fmt,
-    pub width: u32,
-    pub height: u32,
     pub entries: Vec<MetaEntry>,
     /// True when location data is present.
     pub has_gps: bool,
@@ -481,8 +478,9 @@ pub fn inspect(bytes: &[u8]) -> Result<MetaReport> {
         Fmt::Tiff => parse_tiff(bytes, &mut entries, &mut has_gps),
         _ => unreachable!("kind_of only returns JPEG, PNG, WebP and TIFF"),
     }
-    let (width, height) = dimensions(bytes)?;
-    Ok(MetaReport { fmt, width, height, entries, has_gps, removable_bytes: removable })
+    // A file that cannot be decoded has no metadata worth reporting.
+    dimensions(bytes)?;
+    Ok(MetaReport { entries, has_gps, removable_bytes: removable })
 }
 
 /// EXIF orientation 1..=8 (1 when absent or unreadable).
@@ -698,7 +696,6 @@ mod tests {
     #[test]
     fn inspects_exif_and_location_of_a_jpeg() {
         let r = inspect(&jpeg_with_exif(&photo(), &rich_tiff(1))).unwrap();
-        assert_eq!((r.fmt, r.width, r.height), (Fmt::Jpg, 48, 32));
         assert_eq!(value(&r, "Make"), Some("TestCam"));
         assert_eq!(value(&r, "Model"), Some("X-100"));
         assert_eq!(value(&r, "DateTimeOriginal"), Some("2024:05:01 10:20:30"));
@@ -807,7 +804,6 @@ mod tests {
             chunk(b"pHYs", &[0, 0, 0x0B, 0x13, 0, 0, 0x0B, 0x13, 1]),
         ]);
         let r = inspect(&src).unwrap();
-        assert_eq!(r.fmt, Fmt::Png);
         assert_eq!(value(&r, "Author"), Some("Jane Doe"));
         assert_eq!(value(&r, "Make"), Some("TestCam"));
         assert_eq!(value(&r, "Modified"), Some("2024-05-01 10:20:30"));
@@ -854,7 +850,6 @@ mod tests {
         let src = webp_with_metadata();
         assert_eq!(raster::decode(&src).unwrap().to_rgb8(), photo(), "fixture must decode");
         let r = inspect(&src).unwrap();
-        assert_eq!(r.fmt, Fmt::Webp);
         assert_eq!(value(&r, "Make"), Some("TestCam"));
         assert!(r.entries.iter().any(|e| e.group == "XMP"));
         let out = strip(&src).unwrap();
@@ -878,7 +873,7 @@ mod tests {
         let src =
             raster::encode(&DynamicImage::ImageRgb8(photo()), Fmt::Tiff, &raster::EncodeOptions::default()).unwrap();
         let r = inspect(&src).unwrap();
-        assert_eq!((r.fmt, r.width, r.height, r.removable_bytes), (Fmt::Tiff, 48, 32, 0));
+        assert_eq!(r.removable_bytes, 0);
         let out = strip(&src).unwrap();
         assert_eq!(raster::decode(&out).unwrap().to_rgb8(), photo());
     }

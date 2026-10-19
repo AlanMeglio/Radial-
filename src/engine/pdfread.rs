@@ -18,7 +18,7 @@ type Dict = HashMap<String, Obj>;
 #[derive(Clone, Debug)]
 enum Obj {
     Null,
-    Bool(bool),
+    Bool,
     Int(i64),
     Real(f64),
     Name(String),
@@ -186,8 +186,8 @@ impl<'a> Lexer<'a> {
                     return Some(Tok::Op(String::new()));
                 }
                 match w {
-                    b"true" => Obj::Bool(true),
-                    b"false" => Obj::Bool(false),
+                    b"true" => Obj::Bool,
+                    b"false" => Obj::Bool,
                     b"null" => Obj::Null,
                     _ => {
                         let s = std::str::from_utf8(w).unwrap_or("");

@@ -8,7 +8,7 @@
 //!   `source_availability` before offering a sector, and expect `Error::Unavailable` otherwise.
 //!
 //! Nothing here overwrites a file, panics on damaged input, or decodes beyond `raster::MAX_PIXELS`.
-#![allow(dead_code)] // entry points are wired into the UI incrementally
+
 #![allow(clippy::chunks_exact_to_as_chunks)] // `as_chunks` needs Rust 1.88; the declared MSRV is older
 
 pub mod actions;

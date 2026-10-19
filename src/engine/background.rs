@@ -57,6 +57,7 @@ impl Ratio {
     }
 
     /// Width / height, `None` for auto.
+    #[cfg(test)]
     pub fn value(self) -> Option<f64> {
         self.terms().map(|(w, h)| w as f64 / h as f64)
     }

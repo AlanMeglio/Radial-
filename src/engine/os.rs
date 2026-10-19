@@ -155,6 +155,7 @@ pub fn render_pdf_each<T: Send + 'static>(
 }
 
 /// Renders the given pages into memory (see `render_pdf_each` for the one-at-a-time variant).
+#[cfg(test)]
 pub fn render_pdf_pages(pdf: &[u8], pages: &[u32], dpi: u32, max_pixels: u64) -> Result<Vec<RgbaImage>> {
     render_pdf_each(pdf, pages, dpi, max_pixels, |_, img| Ok(img))
 }
@@ -213,6 +214,7 @@ pub enum Availability {
 }
 
 impl Availability {
+    #[cfg(test)]
     pub fn is_available(&self) -> bool {
         matches!(self, Availability::Available)
     }

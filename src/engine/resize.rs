@@ -15,10 +15,6 @@ pub enum Spec {
     MaxSide(u32),
     /// 1..=100 percent of both sides.
     Percent(u32),
-    Exact {
-        w: u32,
-        h: u32,
-    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,14 +66,6 @@ pub fn target_size(src_w: u32, src_h: u32, spec: Spec, allow_upscale: bool) -> (
                 return (w as u32, h as u32);
             }
             scaled(p, 100)
-        }
-        Spec::Exact { w: tw, h: th } => {
-            let (tw, th) = (tw.max(1), th.max(1));
-            if allow_upscale {
-                (tw, th)
-            } else {
-                (tw.min(w as u32), th.min(h as u32))
-            }
         }
     }
 }
@@ -249,6 +237,7 @@ fn resize_file_with(src: &Path, opts: &Options, threads: usize) -> Result<PathBu
 /// Writes `<stem> (resized).<ext>` next to `src` and returns its path. Never overwrites (a taken name gets
 /// ` (1)`, ` (2)`...), and nothing is created when the work fails. EXIF orientation is applied and all metadata,
 /// GPS included, is left out of the copy (privacy).
+#[cfg(test)]
 pub fn resize_file(src: &Path, opts: &Options) -> Result<PathBuf> {
     resize_file_with(src, opts, cores().min(8))
 }
@@ -311,8 +300,6 @@ mod tests {
     fn nothing_grows_unless_asked() {
         assert_eq!(target_size(800, 600, Spec::MaxSide(1600), false), (800, 600));
         assert_eq!(target_size(800, 600, Spec::MaxSide(1600), true), (1600, 1200));
-        assert_eq!(target_size(800, 600, Spec::Exact { w: 2000, h: 100 }, false), (800, 100));
-        assert_eq!(target_size(800, 600, Spec::Exact { w: 2000, h: 100 }, true), (2000, 100));
         assert_eq!(target_size(800, 600, Spec::Percent(200), false), (800, 600));
         assert_eq!(target_size(800, 600, Spec::Percent(200), true), (1600, 1200));
     }
@@ -327,9 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_and_zero_inputs_are_sane() {
-        assert_eq!(target_size(800, 600, Spec::Exact { w: 100, h: 50 }, false), (100, 50));
-        assert_eq!(target_size(800, 600, Spec::Exact { w: 0, h: 0 }, false), (1, 1));
+    fn zero_inputs_are_sane() {
         assert_eq!(target_size(800, 600, Spec::MaxSide(0), false), (1, 1));
     }
 
@@ -400,7 +385,7 @@ mod tests {
     #[test]
     fn a_picture_already_at_or_below_the_size_is_refused_with_a_clear_error() {
         let src = png(&DynamicImage::ImageRgb8(gradient(100, 50)));
-        for spec in [Spec::MaxSide(100), Spec::MaxSide(1600), Spec::Percent(100), Spec::Exact { w: 100, h: 50 }] {
+        for spec in [Spec::MaxSide(100), Spec::MaxSide(1600), Spec::Percent(100)] {
             let e = resize_bytes(&src, &Options::new(spec)).unwrap_err();
             assert!(is_already_small(&e), "{spec:?}: {e}");
         }

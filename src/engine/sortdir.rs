@@ -32,6 +32,7 @@ pub enum Group {
 }
 
 impl Group {
+    #[cfg(test)]
     pub const ALL: [Group; 8] = [
         Group::Images,
         Group::Documents,

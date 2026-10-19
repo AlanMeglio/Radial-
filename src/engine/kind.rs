@@ -46,6 +46,7 @@ impl Target {
         }
     }
 
+    #[cfg(test)]
     pub fn ext(self) -> &'static str {
         match self {
             Target::Image(f) => f.ext(),

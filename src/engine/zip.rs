@@ -174,6 +174,7 @@ impl<'a> ZipArchive<'a> {
         Ok(ZipArchive { data, entries })
     }
 
+    #[cfg(test)]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|e| e.name.as_str())
     }

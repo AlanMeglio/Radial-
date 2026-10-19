@@ -34,7 +34,6 @@ pub enum Case {
     Lower,
     Upper,
     Title,
-    Sentence,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,7 +42,6 @@ pub enum Spaces {
     Keep,
     Underscore,
     Dash,
-    Dot,
     Remove,
 }
 
@@ -274,30 +272,11 @@ fn title_case(s: &str) -> String {
     out
 }
 
-fn sentence_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut first = true;
-    for c in s.chars() {
-        if c.is_alphabetic() {
-            if first {
-                out.extend(c.to_uppercase());
-                first = false;
-            } else {
-                out.extend(c.to_lowercase());
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 fn apply_spaces(s: &str, mode: Spaces) -> String {
     let with = match mode {
         Spaces::Keep => return s.to_string(),
         Spaces::Underscore => "_",
         Spaces::Dash => "-",
-        Spaces::Dot => ".",
         Spaces::Remove => "",
     };
     let mut out = String::with_capacity(s.len());
@@ -317,7 +296,6 @@ fn separator(mode: Spaces) -> &'static str {
         Spaces::Keep => " ",
         Spaces::Underscore | Spaces::Remove => "_",
         Spaces::Dash => "-",
-        Spaces::Dot => ".",
     }
 }
 
@@ -349,7 +327,6 @@ fn new_stem(stem: &str, rule: &Rule, index: usize, stamp: Option<&str>) -> Strin
         Case::Lower => s.to_lowercase(),
         Case::Upper => s.to_uppercase(),
         Case::Title => title_case(&s),
-        Case::Sentence => sentence_case(&s),
     };
     let sep = separator(rule.spaces);
     let number = rule.numbering.map(|n| {
@@ -592,6 +569,7 @@ fn path_key(p: &Path) -> String {
 
 /// Plans `rule` over `paths`; the numbering follows the order of `paths`. Reads the disk (metadata, EXIF, folder
 /// listings) but never changes it.
+#[cfg(test)]
 pub fn plan(paths: &[PathBuf], rule: &Rule) -> Vec<Item> {
     plan_with(&mut Scan::default(), paths, rule)
 }
@@ -952,6 +930,7 @@ pub fn undo_report(u: &Undo) -> Result<UndoReport> {
 }
 
 /// Like [`undo_report`], but entries left alone make it an error (after restoring the rest).
+#[cfg(test)]
 pub fn undo(u: &Undo) -> Result<()> {
     let r = undo_report(u)?;
     match r.skipped.first() {
@@ -1111,11 +1090,10 @@ mod tests {
     }
 
     #[test]
-    fn spaces_can_become_underscores_dashes_dots_or_nothing() {
+    fn spaces_can_become_underscores_dashes_or_nothing() {
         let with = |s| Rule { spaces: s, ..rule() };
         assert_eq!(one("a b  c.txt", &with(Spaces::Underscore)).new_name(), "a_b__c.txt");
         assert_eq!(one("a b c.txt", &with(Spaces::Dash)).new_name(), "a-b-c.txt");
-        assert_eq!(one("a b c.txt", &with(Spaces::Dot)).new_name(), "a.b.c.txt");
         assert_eq!(one("a b c.txt", &with(Spaces::Remove)).new_name(), "abc.txt");
         assert_eq!(one("a b c.txt", &with(Spaces::Keep)).status, Status::Unchanged);
     }
@@ -1130,8 +1108,6 @@ mod tests {
             "Don't Stop Me_Please-Now 3rd.txt"
         );
         assert_eq!(one("the o'brien's CAR.txt", &with(Case::Title)).new_name(), "The O'brien's Car.txt");
-        assert_eq!(one("HELLO wORLD. ok.txt", &with(Case::Sentence)).new_name(), "Hello world. ok.txt");
-        assert_eq!(one("  123 abc.txt", &with(Case::Sentence)).new_name(), "  123 Abc.txt");
         assert_eq!(one("Hello.txt", &with(Case::Title)).status, Status::Unchanged);
     }
 

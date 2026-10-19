@@ -165,6 +165,7 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 /// SHA-256 of `data` as 64 lowercase hex digits.
+#[cfg(test)]
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
@@ -685,7 +686,6 @@ fn publish(tmp: &Path, dest: &Path) -> Result<()> {
 
 struct CdEntry {
     name: String,
-    flags: u16,
     method: u16,
     crc: u32,
     comp: u64,
@@ -786,7 +786,6 @@ fn read_directory(f: &mut File, len: u64, max_entries: usize) -> Result<Vec<CdEn
         comp_sum += u64::from(comp);
         entries.push(CdEntry {
             name,
-            flags,
             method,
             crc,
             comp: u64::from(comp),

@@ -137,7 +137,6 @@ fn tile_sub(spec: Spec, dims: Option<(u32, u32)>, lang: Lang) -> String {
     let head = match spec {
         Spec::MaxSide(n) => format!("{n} px"),
         Spec::Percent(p) => format!("{p}%"),
-        Spec::Exact { w, h } => format!("{w}x{h}"),
     };
     match dims {
         Some((w, h)) => {
