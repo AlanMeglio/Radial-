@@ -865,7 +865,7 @@ impl<'a> Doc<'a> {
         for (pos, snum) in objstms {
             let Some(st) = self.objstm(snum) else { continue };
             for (idx, (n, _)) in st.offs.iter().enumerate() {
-                if best.get(n).map_or(true, |(p, _)| *p < pos) {
+                if best.get(n).is_none_or(|(p, _)| *p < pos) {
                     best.insert(*n, (pos, Entry::InStm(snum, idx as u32)));
                 }
             }

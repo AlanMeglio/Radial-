@@ -2,3 +2,4 @@
 *.png.bak
 .vscode/
 .idea/
+.claude/

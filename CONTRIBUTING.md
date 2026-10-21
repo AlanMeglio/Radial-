@@ -10,7 +10,7 @@ cargo test
 
 - Pure logic is unit tested and new logic starts with a failing test: hit-testing, drag detection, ring building
   (`src/ring.rs`, `src/menus.rs`), the crop rectangle maths (`src/dialogs/geom.rs`), the edit and annotation state
-  machines, settings round trips, the engine (`src/engine`). The MSRV is Rust 1.75; clippy checks it.
+  machines, settings round trips, the engine (`src/engine`). The MSRV is Rust 1.88 (the `image` crate needs it); clippy checks it.
 - Win32 and rendering code cannot be unit tested. Look at it instead:
   - `radial --preview out.png --menu 8|4|7|6 [--hover N] [--theme T] [--dpi 2]` renders a ring over a sample wallpaper.
   - `radial --settings out.png [--tab 1] [--step 0] [--lang es] [--light]` renders the configurator.

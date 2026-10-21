@@ -149,8 +149,17 @@ the sector is greyed out and says so.
 
 ## Install
 
-Download `radial.exe` (or the zip with the licence) from the releases page and run it. It lives in the tray (right
-click for the menu). There is no installer; delete the file and `%APPDATA%\radial` to remove it.
+Download `radial.exe` (or the zip with the licence) from the [releases page](https://github.com/AlanMeglio/Radial-/releases/latest) and run it.
+There is no installer: it is one portable file. Put it wherever you like (for example
+`%LOCALAPPDATA%\Programs\Radial`), run it, and it lives in the tray (right click for the menu). Tick
+**Start with Windows** in the settings, or run `radial.exe --autostart on`, to have it start at sign-in.
+
+The executable is not code-signed, so the first time Windows SmartScreen may say "Windows protected your PC":
+choose **More info** then **Run anyway**. To check the download, compare `Get-FileHash radial.exe` with
+`SHA256SUMS.txt` on the release page.
+
+**Uninstall.** Run `radial.exe --autostart off` (or untick **Start with Windows**), quit it from the tray, then
+delete the file and `%APPDATA%\radial`.
 
 ### Build
 
@@ -299,7 +308,7 @@ Measured on the release build (Windows 11, one machine, so treat the numbers as 
 - A workbook is refused when it holds more than 5 million cells or 256 MB of text, a file when it is over 512 MB, and
   merging stops at 1 GB of input.
 - If Radial ever hits a bug with a file it stops that job, tells you, and writes the details to
-  `%APPDATA%adial\crash.log` (attach it to a bug report); the rest of the program keeps running.
+  `%APPDATA%\radial\crash.log` (attach it to a bug report); the rest of the program keeps running.
 - Sector and dialog texts are English and Spanish; the reasons Windows codecs give for being unavailable are in
   English.
 - Windows 11 is the target; the tray menu, settings window and drag handling use only long-standing Win32 calls.

@@ -184,7 +184,7 @@ mod tests {
     #[test]
     #[ignore = "replaces whatever is on the clipboard; run with --ignored"]
     fn text_round_trips_through_the_clipboard_including_unicode() {
-        let text = "C:\\Users\\Alanm\\Música\\canción - ñandú ✓.txt\r\nsegunda línea";
+        let text = "C:\\Users\\me\\Música\\canción - ñandú ✓.txt\r\nsegunda línea";
         copy_text(text).unwrap();
         let back = paste_text().expect("clipboard text");
         assert_eq!(back, text);

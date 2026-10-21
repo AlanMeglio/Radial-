@@ -259,13 +259,12 @@ impl RenameDialog {
         let plan = self.items.clone();
         let (mailbox, dir) = (self.mailbox.clone(), self.undo_dir.clone());
         host.spawn(move || {
-            let result = rename::apply(&plan).map(|undo| {
+            let result = rename::apply(&plan).inspect(|undo| {
                 // Losing the undo file must not lose the rename: the dialog still holds the undo in memory.
                 let _ = match &dir {
                     Some(d) => undo.save_in(d),
                     None => undo.save(),
                 };
-                undo
             });
             post(&mailbox, Outcome::Applied(result.map_err(|e| e.to_string())));
             JobResult::Saved(Ok(PathBuf::new()))

@@ -1,4 +1,6 @@
 #![windows_subsystem = "windows"]
+// The `chunks_exact` loops predate `as_chunks` (Rust 1.88) and read fine as they are.
+#![allow(clippy::chunks_exact_to_as_chunks)]
 // tiny-skia paints are configured field by field throughout the renderer.
 #![allow(clippy::field_reassign_with_default)]
 //! Radial: drag a file in Explorer, hold Shift, drop it on a sector of the radial menu to convert it.

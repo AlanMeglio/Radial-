@@ -562,7 +562,7 @@ fn unsupported_cells(limit: usize) -> Error {
     let digits = limit.to_string();
     let mut grouped = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(c);
@@ -1917,7 +1917,8 @@ mod tests {
         assert!(p["docProps/core.xml"].contains("<dc:creator>Radial</dc:creator>"));
         assert!(p["docProps/app.xml"].contains("<Application>Radial</Application>"));
         for x in p.values() {
-            assert!(!x.contains("Alanm") && !x.contains('@') && !x.contains("Users"), "{x}");
+            let user = std::env::var("USERNAME").unwrap_or_default();
+            assert!((user.is_empty() || !x.contains(&user)) && !x.contains('@') && !x.contains("Users"), "{x}");
         }
         assert_eq!(write_xlsx(&grid(&[&["a"]]), "S"), write_xlsx(&grid(&[&["a"]]), "S"), "deterministic output");
     }

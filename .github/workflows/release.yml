@@ -27,6 +27,12 @@ jobs:
           if ("v$version" -ne $env:GITHUB_REF_NAME) {
             throw "tag $env:GITHUB_REF_NAME does not match the Cargo.toml version $version"
           }
+          # The executable's version resource is compiled into assets/radial.res from radial.rc.
+          foreach ($key in "FileVersion", "ProductVersion") {
+            if (-not (Select-String -Path assets/radial.rc -SimpleMatch "VALUE `"$key`", `"$version`"" -Quiet)) {
+              throw "$key in assets/radial.rc is not $version; update it and rerun tools/build-resources.ps1"
+            }
+          }
 
       - name: Keep build machine paths out of the executable
         shell: pwsh

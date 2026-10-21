@@ -331,8 +331,7 @@ impl Dialog for AnnotateDialog {
                     let p = self.image_point(x, y);
                     if let Some(l) = self.live.as_mut() {
                         l.to = p;
-                        if l.tool == Tool::Pen && l.points.last().map_or(true, |q| (q.0 - p.0).hypot(q.1 - p.1) >= 1.0)
-                        {
+                        if l.tool == Tool::Pen && l.points.last().is_none_or(|q| (q.0 - p.0).hypot(q.1 - p.1) >= 1.0) {
                             l.points.push(p);
                         }
                     }

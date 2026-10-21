@@ -1121,7 +1121,7 @@ fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -2658,7 +2658,7 @@ mod tests {
         assert_eq!(get(&props, "pages"), Some("1"));
         // A multi-megabyte PDF: the Info dictionary lives in the tail and is still found.
         let mut big = b"%PDF-1.4\n".to_vec();
-        big.extend(std::iter::repeat(b'x').take(3 * 1024 * 1024));
+        big.extend(std::iter::repeat_n(b'x', 3 * 1024 * 1024));
         big.extend_from_slice(b"\n9 0 obj\n<< /Producer (Tail Producer) >>\nendobj\ntrailer\n<< /Info 9 0 R >>\n%%EOF");
         let p = t.write("big.pdf", &big);
         assert_eq!(get(&properties(&p).unwrap(), "producer"), Some("Tail Producer"));

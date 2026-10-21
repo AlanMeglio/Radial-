@@ -62,7 +62,7 @@ First public release.
 - Conversion engine without external tools: images (PNG, JPG, WEBP, GIF, TIFF, BMP in pure Rust; HEIC and AVIF through
   the Windows codecs), PDF to images, text and DOCX (with Windows OCR for scanned pages), images and text to PDF,
   DOCX to PDF and TXT. Nothing is ever overwritten.
-- Frosted-glass renderer with spring animation, seven themes plus user themes, a configurator with live preview and a
+- Frosted-glass renderer with spring animation, eight built-in themes plus user themes, a configurator with live preview and a
   three step onboarding, English and Spanish.
 - Output folder, name collision policy, notification and sound settings, start with Windows, tray menu with pause.
 - Command line: `--formats`, `--open`, `--preview`, `--sheet`, `--settings`, `--dialog`, `--tray-icon`, `--bench`,
@@ -78,4 +78,4 @@ First public release.
 - AVIF encoding is off by default; password-protected PDFs are refused; PDFs without a Unicode font map give no text.
 - Action dialogs take one image at a time; animated GIFs become still pictures.
 
-[0.1.0]: https://github.com/OWNER/radial/releases/tag/v0.1.0
+[0.1.0]: https://github.com/AlanMeglio/Radial-/releases/tag/v0.1.0

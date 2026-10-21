@@ -9,8 +9,6 @@
 //!
 //! Nothing here overwrites a file, panics on damaged input, or decodes beyond `raster::MAX_PIXELS`.
 
-#![allow(clippy::chunks_exact_to_as_chunks)] // `as_chunks` needs Rust 1.88; the declared MSRV is older
-
 pub mod actions;
 pub mod annotate;
 pub mod background;

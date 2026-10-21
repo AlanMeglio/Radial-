@@ -389,11 +389,11 @@ impl Grid {
             let cell = &self.cells[row][c];
             let pad = self.widths[c] - cell.len();
             if self.numeric[c] {
-                out.extend(std::iter::repeat(b' ').take(pad));
+                out.extend(std::iter::repeat_n(b' ', pad));
                 out.extend_from_slice(cell);
             } else {
                 out.extend_from_slice(cell);
-                out.extend(std::iter::repeat(b' ').take(pad));
+                out.extend(std::iter::repeat_n(b' ', pad));
             }
         }
         while out.last() == Some(&b' ') {
